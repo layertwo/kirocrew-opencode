@@ -9,7 +9,7 @@ description = "OpenCode ACP backend for KiroCrew — monkey-patches at runtime, 
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
-    "kirocrew>=0.3.0,<0.4.0",
+    "kirocrew==0.3.0",
 ]
 
 [project.scripts]
