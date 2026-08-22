@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opencode-provider"
+version = "0.1.0"
+description = "OpenCode ACP backend for KiroCrew — monkey-patches at runtime, no source diffs"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[project.scripts]
+gateway = "gateway:_entry"
+
+[tool.setuptools]
+packages = ["opencode_provider"]
+py-modules = ["gateway"]

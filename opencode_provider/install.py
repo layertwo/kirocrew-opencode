@@ -1,0 +1,499 @@
+"""install.py — Monkey-patch KiroCrew to drive ``opencode acp`` as the ACP backend.
+
+This is the delivery mechanism inspired by lenovo1996/KiroCrew-OpenAI-Compatible:
+instead of patching KiroCrew source files, we monkey-patch at runtime before
+the gateway boots. No fork, no source diffs, survives upstream upgrades.
+
+What gets patched:
+  1. acp.types — add ACP_BACKEND_OPENCODE constant + membership
+  2. acp.client.AcpClient — _is_opencode, _spawn, _initialize_session,
+     _extract_tool_call_refinement (raw_params fix), supports_steer,
+     send_command, stream_command, _reject_unknown_server_request
+  3. providers.acp.AcpProvider — is_opencode_backend, route through AcpClient,
+     skip kiro-cli overlays, stream_command routing
+  4. config.loader — factory passes acp_backend=opencode
+  5. session.SessionManager._bg_provider_is_kiro — False (bg sessions route
+     through the patched factory instead of bypassing to kiro-cli)
+  6. acp._dispatch._build_tool_refinement_event — raw_params_cache refresh
+     (root-cause fix for deny-by-default; benefits ALL backends)
+
+Call ``install()`` BEFORE ``kirocrew gateway`` initialises its provider factory.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+from ._config import (
+    ACP_BACKEND_OPENCODE,
+    PROTOCOL_VERSION_OPENCODE,
+    OPENCODE_SUBCMD,
+    is_opencode_selected,
+    resolve_opencode_bin,
+)
+
+logger = logging.getLogger(__name__)
+
+_installed = False
+
+
+def is_installed() -> bool:
+    return _installed
+
+
+def install() -> None:
+    """Apply all monkey-patches. Safe to call multiple times (idempotent)."""
+    global _installed
+    if _installed:
+        return
+    if not is_opencode_selected():
+        logger.info(
+            "opencode_provider: KIROCREW_ACP_BACKEND != 'opencode' — skipping install"
+        )
+        return
+
+    _patch_types()
+    _patch_client()
+    _patch_provider()
+    _patch_factory()
+    _patch_bg_sessions()
+    _patch_dispatch_raw_params()
+
+    _installed = True
+    logger.info("opencode_provider installed — OpenCode ACP backend active")
+
+
+# ── 1. acp.types — add backend constant ──────────────────────────────────────
+
+
+def _patch_types() -> None:
+    """Add ACP_BACKEND_OPENCODE to acp.types and ACP_BACKENDS_KNOWN.
+
+    Targets 0.3.0+ which has the membership-set architecture
+    (ACP_BACKENDS_KNOWN, ACP_BACKENDS_SESSION_SHARING, etc.).
+    """
+    from kiro_crew.acp import types as t
+
+    if not hasattr(t, "ACP_BACKEND_OPENCODE"):
+        t.ACP_BACKEND_OPENCODE = ACP_BACKEND_OPENCODE
+        logger.info("opencode_provider: added ACP_BACKEND_OPENCODE to acp.types")
+
+    known = getattr(t, "ACP_BACKENDS_KNOWN", None)
+    if known is not None and ACP_BACKEND_OPENCODE not in known:
+        t.ACP_BACKENDS_KNOWN = known | {ACP_BACKEND_OPENCODE}
+        logger.info("opencode_provider: added opencode to ACP_BACKENDS_KNOWN")
+
+    # NOT added to ACP_BACKENDS_SESSION_SHARING, ACP_BACKENDS_STEER,
+    # ACP_BACKENDS_INTERNAL_SANDBOX, or ACP_BACKENDS_ACP_RUNTIME —
+    # OpenCode is one-process-per-session like claude, not multiplexed.
+
+
+# ── 2. acp.client.AcpClient — OpenCode spawn + protocol + raw_params fix ─────
+
+
+def _patch_client() -> None:
+    """Monkey-patch AcpClient to handle the OpenCode backend."""
+    from kiro_crew.acp.client import AcpClient
+
+    # Import the constant we just added to types
+    from kiro_crew.acp.types import ACP_BACKEND_OPENCODE
+
+    # ── _is_opencode property ──
+    @property
+    def _is_opencode(self) -> bool:  # type: ignore[no-untyped-def]
+        return self.backend == ACP_BACKEND_OPENCODE
+
+    AcpClient._is_opencode = _is_opencode
+
+    # ── _spawn — add OpenCode branch ──
+    _orig_spawn = AcpClient._spawn
+
+    async def _spawn(self) -> None:  # type: ignore[no-untyped-def]
+        if self._is_opencode:
+            await asyncio.to_thread(self._work_dir.mkdir, parents=True, exist_ok=True)
+            opencode_bin = await asyncio.to_thread(resolve_opencode_bin)
+            if not opencode_bin:
+                from kiro_crew.acp.client import AcpError
+                raise AcpError("opencode not found in PATH (set OPENCODE_BIN or install opencode)")
+            self._argv_cache = [opencode_bin, OPENCODE_SUBCMD, "--cwd", str(self._work_dir)]
+            # OpenCode has no internal sandbox — do NOT set is_kiro_cli=True.
+            from kiro_crew.acp.client import wrap_argv
+            argv, self._sandbox_cleanup = wrap_argv(
+                self._argv_cache,
+                mode=self._sandbox_mode,
+                strip_python_env=True,
+                is_kiro_cli=False,
+            )
+            self._argv_cache = argv
+            await self._start_process(self._argv_cache)
+            return
+        await _orig_spawn(self)
+
+    AcpClient._spawn = _spawn
+
+    # ── _initialize_session — numeric protocol version, skip set_mode ──
+    _orig_init = AcpClient._initialize_session
+
+    async def _initialize_session(self) -> None:  # type: ignore[no-untyped-def]
+        if not self._is_opencode:
+            return await _orig_init(self)
+
+        from kiro_crew.acp.client import (
+            METHOD_INITIALIZE,
+            CLIENT_NAME,
+            CLIENT_VERSION,
+            ACP_CLIENT_CAPABILITIES,
+            _INIT_TIMEOUT,
+        )
+
+        # 1. Initialize with numeric protocol version (same as claude).
+        init_id = await self._send_request(
+            METHOD_INITIALIZE,
+            {
+                "protocolVersion": PROTOCOL_VERSION_OPENCODE,
+                "clientInfo": {"name": CLIENT_NAME, "version": CLIENT_VERSION},
+                "clientCapabilities": ACP_CLIENT_CAPABILITIES,
+            },
+        )
+        init_resp = await self._wait_for_response(init_id, timeout=_INIT_TIMEOUT)
+        logger.info("OpenCode ACP initialized (protocol=%s)", init_resp.get("protocolVersion"))
+
+        self._can_load_session = init_resp.get("agentCapabilities", {}).get("loadSession", False)
+
+        # 2. session/load or session/new (reuse the original logic — it already
+        #    handles both paths. But skip --agent for OpenCode since it has no
+        #    agent modes).
+        self._resumed = False
+        resume_sid = self._resume_session_id
+        self._resume_session_id = None
+
+        if resume_sid and self._can_load_session:
+            from kiro_crew.acp.client import METHOD_SESSION_LOAD
+            load_id = await self._send_request(
+                METHOD_SESSION_LOAD, {"sessionId": resume_sid}
+            )
+            load_resp = await self._wait_for_response(load_id, timeout=_INIT_TIMEOUT)
+            if not load_resp.get("error"):
+                self._session_id = resume_sid
+                self._resumed = True
+
+        if not self._resumed:
+            new_params: dict[str, Any] = {"cwd": str(self._work_dir)}
+            new_params["mcpServers"] = self._pooled_mcp_servers()
+            if self._model:
+                new_params["model"] = self._model
+            # configOptions from the initialize response (model list etc.)
+            config_opts = init_resp.get("configOptions")
+            if config_opts:
+                new_params["configOptions"] = config_opts
+            from kiro_crew.acp.client import METHOD_SESSION_NEW
+            new_id = await self._send_request(METHOD_SESSION_NEW, new_params)
+            session_resp = await self._wait_for_response(new_id, timeout=_INIT_TIMEOUT)
+            if session_resp.get("error"):
+                from kiro_crew.acp.client import AcpError
+                raise AcpError(f"session/new failed: {session_resp['error']}")
+            self._session_id = session_resp.get("sessionId", "")
+
+        # 3. Skip set_mode — OpenCode has no kiro modes.
+        # 4. Skip JSONL seek — OpenCode stores sessions via its own SDK.
+        # 5. set_model if needed (reuse original's model-setting logic).
+        if self._model and not self._resumed:
+            try:
+                await self._send_request("session/setModel", {"model": self._model})
+            except Exception:
+                pass  # best-effort; OpenCode may not need it
+
+    AcpClient._initialize_session = _initialize_session
+
+    # ── _extract_tool_call_refinement — refresh _tool_call_params (raw_params fix) ──
+    # Root cause of deny-by-default: when an agent streams a tool call in two
+    # frames (initial tool_call with empty rawInput, then tool_call_update with
+    # the populated dict), the refinement handler never writes to
+    # _tool_call_params, so the permission gate can't recover the command.
+    _orig_extract_refinement = AcpClient._extract_tool_call_refinement
+
+    def _extract_tool_call_refinement(self, msg):  # type: ignore[no-untyped-def]
+        result = _orig_extract_refinement(self, msg)
+        if result is None:
+            return None
+        # If the refinement carried a populated rawInput dict, refresh the cache
+        # so the permission gate can recover the command later.
+        params = msg.params or {}
+        update = params.get("update", {})
+        raw_input = update.get("rawInput")
+        tool_use_id = update.get("toolCallId", "")
+        if tool_use_id and isinstance(raw_input, dict) and raw_input:
+            self._tool_call_params[tool_use_id] = raw_input
+        return result
+
+    AcpClient._extract_tool_call_refinement = _extract_tool_call_refinement
+
+    # ── supports_steer — False for OpenCode ──
+    _orig_supports_steer = AcpClient.supports_steer
+
+    @property
+    def supports_steer(self) -> bool:  # type: ignore[no-untyped-def]
+        if self._is_opencode:
+            return False
+        return _orig_supports_steer.fget(self)  # type: ignore[attr-defined]
+
+    AcpClient.supports_steer = supports_steer
+
+    # ── _reject_unknown_server_request — answer _kiro.dev/* locally ──
+    _orig_reject = AcpClient._reject_unknown_server_request
+
+    async def _reject_unknown_server_request(self, msg) -> None:  # type: ignore[no-untyped-def]
+        if (
+            self._is_opencode
+            and isinstance(msg.method, str)
+            and msg.method.startswith("_kiro.dev/")
+            and msg.id is not None
+        ):
+            await self._send_response(msg.id, {})
+            return
+        await _orig_reject(self, msg)
+
+    AcpClient._reject_unknown_server_request = _reject_unknown_server_request
+
+    # ── send_command — route through session/prompt for OpenCode ──
+    _orig_send_command = AcpClient.send_command
+
+    async def send_command(self, command: str, args: dict | None = None) -> str:  # type: ignore[no-untyped-def]
+        if self._is_opencode:
+            await self.ensure_ready()
+            result = await self._read_prompt_response(
+                await self._send_prompt(command), timeout=60.0
+            )
+            return result
+        return await _orig_send_command(self, command, args)
+
+    AcpClient.send_command = send_command
+
+    # ── stream_command — route through session/prompt for OpenCode ──
+    _orig_stream_command = AcpClient.stream_command
+
+    async def stream_command(self, command: str, timeout: float = 60.0):  # type: ignore[no-untyped-def]
+        if self._is_opencode:
+            self._cancelled = False
+            await self.ensure_ready()
+            async for e in self._dispatch_events(
+                await self._send_prompt(command), timeout
+            ):
+                yield e
+            return
+        async for e in _orig_stream_command(self, command, timeout):
+            yield e
+
+    AcpClient.stream_command = stream_command
+
+    logger.info("opencode_provider: AcpClient patched ✅")
+
+
+# ── 3. providers.acp.AcpProvider — route through AcpClient, skip overlays ───
+
+
+def _patch_provider() -> None:
+    """Monkey-patch AcpProvider to handle the OpenCode backend.
+
+    Targets 0.3.0+ where is_session_sharing_eligible and start() use
+    membership-set checks (ACP_BACKENDS_SESSION_SHARING, ACP_BACKENDS_ACP_RUNTIME).
+    OpenCode is not a member of either set, so the membership checks already
+    exclude it — we only need to add is_opencode_backend and route start()
+    through AcpClient.ensure_ready() instead of _start_kiro_runtime().
+    """
+    from kiro_crew.providers.acp import AcpProvider
+    from kiro_crew.acp.types import ACP_BACKEND_OPENCODE
+
+    @property
+    def is_opencode_backend(self) -> bool:  # type: ignore[no-untyped-def]
+        return self._client.backend == ACP_BACKEND_OPENCODE
+
+    AcpProvider.is_opencode_backend = is_opencode_backend
+
+    # ── start() — route OpenCode through AcpClient (not AcpRuntime) ──
+    # 0.3.0+ start() checks ``not self.is_claude_backend and not
+    # self.is_opencode_backend`` via ACP_BACKENDS_ACP_RUNTIME membership —
+    # but OpenCode is not a member, so it already falls through to the
+    # AcpClient path. We override start() anyway to skip the kiro-cli
+    # overlays (effort, tool-search) that the original start() applies
+    # unconditionally before the routing check.
+    _orig_start = AcpProvider.start
+
+    async def start(self) -> None:  # type: ignore[no-untyped-def]
+        if self.is_opencode_backend:
+            await self._client.ensure_ready()
+            return
+        await _orig_start(self)
+
+    AcpProvider.start = start
+
+    # ── _apply_effort_overlay — no-op for OpenCode ──
+    _orig_effort = AcpProvider._apply_effort_overlay
+
+    def _apply_effort_overlay(self) -> None:  # type: ignore[no-untyped-def]
+        if not self.is_opencode_backend:
+            _orig_effort(self)
+
+    AcpProvider._apply_effort_overlay = _apply_effort_overlay
+
+    # ── _apply_tool_search_overlay — no-op for OpenCode ──
+    _orig_tool_search = AcpProvider._apply_tool_search_overlay
+
+    def _apply_tool_search_overlay(self) -> None:  # type: ignore[no-untyped-def]
+        if not self.is_opencode_backend:
+            _orig_tool_search(self)
+
+    AcpProvider._apply_tool_search_overlay = _apply_tool_search_overlay
+
+    # ── stream_command — route through session/prompt for OpenCode ──
+    _orig_stream = AcpProvider.stream_command
+
+    async def stream_command(self, command: str):  # type: ignore[no-untyped-def]
+        if self.is_opencode_backend:
+            async for e in self._client.stream_events(command):
+                yield self._to_llm_event(e)
+            return
+        async for e in _orig_stream(self, command):
+            yield e
+
+    AcpProvider.stream_command = stream_command
+
+    logger.info("opencode_provider: AcpProvider patched ✅")
+
+
+# ── 4. config.loader — factory passes acp_backend=opencode ──────────────────
+
+
+def _patch_factory() -> None:
+    """Patch the provider factory to pass acp_backend=opencode."""
+    from kiro_crew.config.loader import KiroCrewConfig
+    from kiro_crew.acp.types import ACP_BACKEND_OPENCODE
+
+    _orig_create = KiroCrewConfig.create_provider_factory
+
+    def create_provider_factory(self):  # type: ignore[no-untyped-def]
+        factory = _orig_create(self)
+
+        def _wrapped_factory(**kwargs):
+            provider = factory(**kwargs)
+            # If it's an AcpProvider, inject the opencode backend.
+            if hasattr(provider, "_client"):
+                provider._client._acp_backend = ACP_BACKEND_OPENCODE
+            return provider
+
+        return _wrapped_factory
+
+    KiroCrewConfig.create_provider_factory = create_provider_factory
+    logger.info("opencode_provider: provider factory patched ✅")
+
+
+# ── 5. session.SessionManager._bg_provider_is_kiro — False ──────────────────
+
+
+def _patch_bg_sessions() -> None:
+    """Patch _bg_provider_is_kiro so bg sessions route through the factory.
+
+    Stolen from lenovo1996/KiroCrew-OpenAI-Compatible (patch 5). Without this,
+    auto-title / link-summary calls bypass the patched factory and hit
+    kiro-cli → Anthropic, failing with quota errors when no Anthropic key
+    is configured.
+    """
+    from kiro_crew.session import SessionManager
+
+    def _bg_provider_is_not_kiro(self) -> bool:  # type: ignore[no-untyped-def]
+        return False
+
+    SessionManager._bg_provider_is_kiro = _bg_provider_is_not_kiro
+    logger.info("opencode_provider: bg session routing patched ✅")
+
+
+# ── 6. acp._dispatch._build_tool_refinement_event — raw_params fix ──────────
+
+
+def _patch_dispatch_raw_params() -> None:
+    """Fix raw_params_cache refresh in _build_tool_refinement_event.
+
+    Root-cause fix for deny-by-default: when an agent streams a tool call in
+    two frames, the refinement handler refreshes shell_cache and
+    tool_input_cache but never raw_params_cache. This benefits ALL backends
+    (kiro-cli, claude, opencode) — any agent that streams tool calls in two
+    frames now has its raw_params recovered for the permission gate.
+    """
+    try:
+        from kiro_crew.acp import _dispatch
+    except ImportError:
+        logger.warning("opencode_provider: _dispatch.py not found — skipping raw_params fix")
+        return
+
+    _orig_build_refine = _dispatch._build_tool_refinement_event
+
+    def _build_tool_refinement_event(  # type: ignore[no-untyped-def]
+        update,
+        tool_input_cache=None,
+        shell_cache=None,
+        raw_params_cache=None,
+    ):
+        result = _orig_build_refine(update, tool_input_cache, shell_cache)
+        if result is None:
+            return None
+        tool_use_id = update.get("toolCallId", "")
+        raw_input = update.get("rawInput")
+        if (
+            tool_use_id
+            and raw_params_cache is not None
+            and isinstance(raw_input, dict)
+            and raw_input
+        ):
+            raw_params_cache[tool_use_id] = raw_input
+        return result
+
+    _dispatch._build_tool_refinement_event = _build_tool_refinement_event
+
+    # 0.3.0's parse_session_update calls _build_tool_refinement_event WITHOUT
+    # passing raw_params_cache. Patch it to thread raw_params_cache through.
+    _orig_parse = _dispatch.parse_session_update
+
+    def parse_session_update(  # type: ignore[no-untyped-def]
+        update,
+        *,
+        tool_input_cache=None,
+        shell_cache=None,
+        raw_params_cache=None,
+        mcp_server_name_cache=None,
+        tool_name_cache=None,
+    ):
+        if raw_params_cache is None:
+            # No raw_params_cache — original behavior is correct.
+            return _orig_parse(
+                update,
+                tool_input_cache=tool_input_cache,
+                shell_cache=shell_cache,
+                raw_params_cache=raw_params_cache,
+                mcp_server_name_cache=mcp_server_name_cache,
+                tool_name_cache=tool_name_cache,
+            )
+        # With raw_params_cache: call original for non-refinement events, then
+        # manually refresh raw_params_cache from any tool_call_update in the update.
+        events = _orig_parse(
+            update,
+            tool_input_cache=tool_input_cache,
+            shell_cache=shell_cache,
+            raw_params_cache=raw_params_cache,
+            mcp_server_name_cache=mcp_server_name_cache,
+            tool_name_cache=tool_name_cache,
+        )
+        # The original parse_session_update does NOT pass raw_params_cache to
+        # _build_tool_refinement_event, so our patched version got None. Refresh
+        # manually from the update dict.
+        if isinstance(update, dict) and update.get("sessionUpdate") == "tool_call_update":
+            tool_use_id = update.get("toolCallId", "")
+            raw_input = update.get("rawInput")
+            if tool_use_id and isinstance(raw_input, dict) and raw_input:
+                raw_params_cache[tool_use_id] = raw_input
+        return events
+
+    _dispatch.parse_session_update = parse_session_update
+
+    logger.info("opencode_provider: _dispatch raw_params fix patched ✅")
