@@ -32,11 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=opencode-stage /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=opencode-stage /usr/local/bin/opencode /usr/local/bin/opencode
 
-# Install KiroCrew from GitHub (not on PyPI).
-ARG KIROCREW_REF=v0.3.0
-RUN pip install --no-cache-dir "git+https://github.com/kirodotdev/KiroCrew.git@${KIROCREW_REF}"
-
 # Copy the opencode_provider package + gateway entry point, then pip install.
+# KiroCrew is pulled in automatically as a git dependency from pyproject.toml.
 COPY . /opt/opencode_provider/
 RUN pip install --no-cache-dir /opt/opencode_provider
 

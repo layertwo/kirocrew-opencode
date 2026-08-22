@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "OpenCode ACP backend for KiroCrew — monkey-patches at runtime, no source diffs"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-dependencies = []
+dependencies = [
+    "kirocrew @ git+https://github.com/kirodotdev/KiroCrew.git@v0.3.0",
+]
 
 [project.optional-dependencies]
 dev = [
