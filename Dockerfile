@@ -15,7 +15,7 @@
 # ─────────────────────────────────────────────────────────────
 # Stage 1: install opencode (Node CLI)
 # ─────────────────────────────────────────────────────────────
-FROM node:22-slim AS opencode-stage
+FROM node:24-slim AS opencode-stage
 
 RUN npm install -g opencode@1.18.18
 
