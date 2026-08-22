@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────────────────────────
 FROM node:22-slim AS opencode-stage
 
-RUN npm install -g opencode@1.18.18
+RUN npm install -g opencode-ai@1.18.21
 
 # ─────────────────────────────────────────────────────────────
 # Stage 2: install KiroCrew + opencode_provider
@@ -32,8 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=opencode-stage /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=opencode-stage /usr/local/bin/opencode /usr/local/bin/opencode
 
+# Install KiroCrew from GitHub (not on PyPI).
+ARG KIROCREW_REF=v0.3.0
+RUN pip install --no-cache-dir "git+https://github.com/kirodotdev/KiroCrew.git@${KIROCREW_REF}"
+
 # Copy the opencode_provider package + gateway entry point, then pip install.
-# kirocrew is pulled in as a dependency from pyproject.toml — no separate install.
 COPY . /opt/opencode_provider/
 RUN pip install --no-cache-dir /opt/opencode_provider
 

@@ -95,6 +95,16 @@ def patch_client() -> None:
 
         self._can_load_session = init_resp.get("agentCapabilities", {}).get("loadSession", False)
 
+        # Capture available models from the initialize response so the model
+        # dropdown and advertised_model_ids work. The original _initialize_session
+        # calls _capture_available_models; we replicate it here.
+        config_opts = init_resp.get("configOptions") or []
+        if hasattr(self, "_capture_available_models"):
+            try:
+                self._capture_available_models(config_opts)
+            except Exception:
+                logger.warning("OpenCode: _capture_available_models failed", exc_info=True)
+
         self._resumed = False
         resume_sid = self._resume_session_id
         self._resume_session_id = None
@@ -129,9 +139,9 @@ def patch_client() -> None:
         # Skip JSONL seek — OpenCode stores sessions via its own SDK.
         if self._model and not self._resumed:
             try:
-                await self._send_request("session/setModel", {"model": self._model})
+                await self._send_request("session/set_model", {"model": self._model})
             except Exception:
-                pass
+                logger.warning("OpenCode: session/set_model failed (model=%s)", self._model, exc_info=True)
 
     AcpClient._initialize_session = _initialize_session
 
@@ -277,6 +287,10 @@ def patch_dispatch_raw_params() -> None:
     Root-cause fix for deny-by-default: when an agent streams a tool call in
     two frames, the refinement handler refreshes shell_cache and
     tool_input_cache but never raw_params_cache. Benefits ALL backends.
+
+    0.3.0's parse_session_update calls _build_tool_refinement_event WITHOUT
+    passing raw_params_cache, so we patch parse_session_update itself to
+    manually refresh the cache after calling the original.
     """
     try:
         from kiro_crew.acp import _dispatch
@@ -284,32 +298,6 @@ def patch_dispatch_raw_params() -> None:
         logger.warning("opencode_provider: _dispatch.py not found — skipping raw_params fix")
         return
 
-    _orig_build_refine = _dispatch._build_tool_refinement_event
-
-    def _build_tool_refinement_event(  # type: ignore[no-untyped-def]
-        update,
-        tool_input_cache=None,
-        shell_cache=None,
-        raw_params_cache=None,
-    ):
-        result = _orig_build_refine(update, tool_input_cache, shell_cache)
-        if result is None:
-            return None
-        tool_use_id = update.get("toolCallId", "")
-        raw_input = update.get("rawInput")
-        if (
-            tool_use_id
-            and raw_params_cache is not None
-            and isinstance(raw_input, dict)
-            and raw_input
-        ):
-            raw_params_cache[tool_use_id] = raw_input
-        return result
-
-    _dispatch._build_tool_refinement_event = _build_tool_refinement_event
-
-    # 0.3.0's parse_session_update calls _build_tool_refinement_event WITHOUT
-    # passing raw_params_cache. Patch it to thread raw_params_cache through.
     _orig_parse = _dispatch.parse_session_update
 
     def parse_session_update(  # type: ignore[no-untyped-def]
@@ -330,8 +318,7 @@ def patch_dispatch_raw_params() -> None:
             tool_name_cache=tool_name_cache,
         )
         # The original parse_session_update does NOT pass raw_params_cache to
-        # _build_tool_refinement_event, so our patched version got None. Refresh
-        # manually from the update dict.
+        # _build_tool_refinement_event, so manually refresh from the update dict.
         if (
             raw_params_cache is not None
             and isinstance(update, dict)
