@@ -32,16 +32,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=opencode-stage /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=opencode-stage /usr/local/bin/opencode /usr/local/bin/opencode
 
-# Install KiroCrew from PyPI (no source patching needed).
-# Pinned to 0.3.0 — the membership-set architecture makes patching cleaner.
-ARG KIROCREW_VERSION=0.3.0
-RUN pip install --no-cache-dir kirocrew==${KIROCREW_VERSION}
-
-# Copy the opencode_provider package + gateway entry point.
-COPY opencode_provider/ /opt/opencode_provider/opencode_provider/
-COPY gateway.py /opt/opencode_provider/gateway.py
-
-RUN pip install --no-cache-dir -e /opt/opencode_provider
+# Copy the opencode_provider package + gateway entry point, then pip install.
+# kirocrew is pulled in as a dependency from pyproject.toml — no separate install.
+COPY . /opt/opencode_provider/
+RUN pip install --no-cache-dir /opt/opencode_provider
 
 # ─────────────────────────────────────────────────────────────
 # Stage 3: runtime
