@@ -17,10 +17,10 @@
 # ─────────────────────────────────────────────────────────────
 FROM node:24-slim AS opencode-stage
 
-RUN npm install -g opencode@1.18.18
+RUN npm install -g opencode-ai@1.18.21
 
 # ─────────────────────────────────────────────────────────────
-# Stage 2: install KiroCrew + opencode_provider
+# Stage 2: install KiroCrew + opencode_provider (uv)
 # ─────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS kirocrew-stage
 
@@ -28,20 +28,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Install uv (fast Python package installer/resolver).
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Copy opencode binary from stage 1.
 COPY --from=opencode-stage /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=opencode-stage /usr/local/bin/opencode /usr/local/bin/opencode
 
-# Install KiroCrew from PyPI (no source patching needed).
-# Pinned to 0.3.0 — the membership-set architecture makes patching cleaner.
-ARG KIROCREW_VERSION=0.3.0
-RUN pip install --no-cache-dir kirocrew==${KIROCREW_VERSION}
-
-# Copy the opencode_provider package + gateway entry point.
-COPY opencode_provider/ /opt/opencode_provider/opencode_provider/
-COPY gateway.py /opt/opencode_provider/gateway.py
-
-RUN pip install --no-cache-dir -e /opt/opencode_provider
+# Copy the opencode_provider package + lockfile, then uv install.
+# KiroCrew is pulled in automatically as a git dependency from pyproject.toml.
+COPY . /opt/opencode_provider/
+WORKDIR /opt/opencode_provider
+RUN uv pip install --system --no-cache .
 
 # ─────────────────────────────────────────────────────────────
 # Stage 3: runtime
