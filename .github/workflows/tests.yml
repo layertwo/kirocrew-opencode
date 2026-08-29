@@ -15,7 +15,8 @@ jobs:
 
       # uv, not pip: [tool.uv.sources] is uv-only, pip would look for
       # kirocrew on PyPI (it isn't there) and fail.
-      - uses: astral-sh/setup-uv@v10
+      # No floating major tag on this action — pin exact, renovate bumps it.
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"
           enable-cache: true
