@@ -46,7 +46,43 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
+          # Also load into the local daemon so the smoke test below can run the
+          # image on pull requests, where nothing is pushed. Multiple exporters
+          # need buildx >= 0.13 and a single platform; both hold here.
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # A green build only proves the COPYs resolved. These run the image.
+      # Everything here exits on its own — booting the real gateway would need
+      # config and credentials and would bind a port, which is how smoke tests
+      # turn flaky.
+      - name: Smoke test the image
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # One name per `command -v` — POSIX sh takes a single operand, and
+          # /bin/sh is dash on the Debian-slim base.
+          docker run --rm --entrypoint sh "$IMAGE" -c \
+            'for b in gateway kirocrew opencode; do command -v "$b"; done'
+          docker run --rm --entrypoint kirocrew "$IMAGE" --version
+          docker run --rm -i --entrypoint python "$IMAGE" - <<'PY'
+          # KIROCREW_ACP_BACKEND=opencode is baked into the image, so install()
+          # applies for real here rather than no-oping.
+          import opencode_provider
+          opencode_provider.install()
+          assert opencode_provider.is_installed(), "install() no-oped"
+
+          from kiro_crew.acp.client import AcpClient
+          assert hasattr(AcpClient, "_is_opencode"), "AcpClient patch missing"
+          assert hasattr(AcpClient, "_start_process"), "spawn helper missing"
+
+          from kiro_crew.providers.acp import AcpProvider
+          assert hasattr(AcpProvider, "is_opencode_backend"), "AcpProvider patch missing"
+
+          import kiro_crew.cli  # what gateway.py imports after install()
+          print("smoke ok")
+          PY
