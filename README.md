@@ -194,5 +194,8 @@ itself whenever upstream fixes this — including on backports.
   `session/new` `configOptions`, which KiroCrew reads natively.
 - **No session sharing** — OpenCode is one process per session (like
   claude), not multiplexed (like kiro-cli).
-- **No container smoke test** — CI builds the image but never runs it, so
-  "the build is green" does not mean the gateway starts.
+- **No full gateway boot in CI** — the Docker workflow builds the image, loads
+  it, and smoke-tests it: the `gateway`/`kirocrew`/`opencode` binaries resolve,
+  `kirocrew --version` runs, `install()` applies the patches for real, and
+  `kiro_crew.cli` imports. It does **not** start the gateway or bind a port —
+  that needs config and credentials, which is how smoke tests turn flaky.
