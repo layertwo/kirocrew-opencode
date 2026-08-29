@@ -22,7 +22,7 @@ RUN npm install -g opencode-ai@1.18.21
 # ─────────────────────────────────────────────────────────────
 # Stage 2: install KiroCrew + opencode_provider (uv)
 # ─────────────────────────────────────────────────────────────
-FROM python:3.12-slim AS kirocrew-stage
+FROM python:3.14-slim AS kirocrew-stage
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates build-essential \
@@ -44,7 +44,7 @@ RUN uv pip install --system --no-cache .
 # ─────────────────────────────────────────────────────────────
 # Stage 3: runtime
 # ─────────────────────────────────────────────────────────────
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates \
