@@ -13,12 +13,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
+      # uv, not pip: [tool.uv.sources] is uv-only, pip would look for
+      # kirocrew on PyPI (it isn't there) and fail.
+      # No floating major tag on this action — pin exact, renovate bumps it.
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           python-version: "3.12"
+          enable-cache: true
 
       - name: Install package + deps
-        run: pip install -e ".[dev]"
+        run: uv sync --extra dev
 
       - name: Run tests
-        run: python -m pytest tests/ -v
+        run: uv run pytest tests/ -v
