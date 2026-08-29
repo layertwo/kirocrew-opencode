@@ -9,7 +9,7 @@ description = "OpenCode ACP backend for KiroCrew — monkey-patches at runtime, 
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
-    "kirocrew @ git+https://github.com/kirodotdev/KiroCrew.git@v0.3.0",
+    "kirocrew",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +20,11 @@ dev = [
 
 [project.scripts]
 gateway = "gateway:_entry"
+
+# Renovate reads the tag from here (github-tags datasource) and bumps it.
+# A PEP 508 `pkg @ git+...` in project.dependencies is invisible to it.
+[tool.uv.sources]
+kirocrew = { git = "https://github.com/kirodotdev/KiroCrew.git", tag = "v0.3.0" }
 
 [tool.setuptools]
 packages = ["opencode_provider"]
