@@ -50,14 +50,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy opencode from build stage.
-COPY --from=kirocrew-stage /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=kirocrew-stage /usr/local/bin/opencode /usr/local/bin/opencode
-
-# Copy installed Python packages.
-COPY --from=kirocrew-stage /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=kirocrew-stage /usr/local/bin/kirocrew /usr/local/bin/kirocrew
-COPY --from=kirocrew-stage /usr/local/bin/gateway /usr/local/bin/gateway
+# Everything we need — opencode + node_modules, the site-packages tree, and the
+# kirocrew/gateway/uv entry points — already lives under /usr/local in the build
+# stage, which shares this stage's base image. Copy it wholesale rather than
+# naming site-packages by interpreter version: a hardcoded
+# /usr/local/lib/python3.12 breaks the build the moment renovate bumps the base
+# image to 3.14, and the version cannot be factored into an ARG without
+# blinding renovate's dockerfile manager (it only rewrites lines that literally
+# contain the current value, so `python:${PYTHON_VERSION}-slim` never matches).
+# ponytail: costs ~the size of the base interpreter in a duplicated layer.
+# Switch to installing into a fixed-path venv (/opt/venv) if image size matters.
+COPY --from=kirocrew-stage /usr/local /usr/local
 
 # Set the ACP backend to opencode (the factory reads this env var).
 ENV KIROCREW_ACP_BACKEND=opencode
