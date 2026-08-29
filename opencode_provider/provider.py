@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from ._config import (
@@ -40,6 +41,54 @@ def patch_client() -> None:
         return self.backend == ACP_BACKEND_OPENCODE
 
     AcpClient._is_opencode = _is_opencode
+
+    # ── _start_process — launch helper the OpenCode _spawn branch calls ──
+    # Upstream _spawn is a ~250-line monolith that inlines argv selection, the
+    # sandbox/cgroup wrap, env prep and the launch. It exposes no seam to reuse,
+    # and its non-claude branch raises AcpError when kiro-cli is absent — which
+    # it is in our image — so delegating to it is not an option. Own the launch,
+    # borrowing upstream's helpers for the parts that matter.
+    async def _start_process(self, argv: list[str]) -> None:  # type: ignore[no-untyped-def]
+        from kiro_crew import platform_compat
+        from kiro_crew.acp.client import (
+            _STDOUT_BUFFER_LIMIT,
+            KIROCREW_SPAWNED_ENV,
+            KIROCREW_SPAWNED_VALUE,
+        )
+        from kiro_crew.env import augmented_path
+        from kiro_crew.sandbox import create_subprocess_limited, scrub_agent_denied_env
+
+        env = {**os.environ, **(self._extra_env or {})}
+        # Keep gateway-owned channel credentials out of the agent subprocess.
+        env = scrub_agent_denied_env(env)
+        env["PATH"] = augmented_path(env.get("PATH", ""))
+        # Positive-identity marker so the orphan sweep recognises this tree.
+        env[KIROCREW_SPAWNED_ENV] = KIROCREW_SPAWNED_VALUE
+
+        self._process = await create_subprocess_limited(
+            *argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(self._work_dir),
+            limit=_STDOUT_BUFFER_LIMIT,
+            env=env,
+            # POSIX: setsid so _kill_process can killpg the tree. Windows: the
+            # flag makes the tree taskkill /T-reapable. Absent -> 0 (no-op).
+            start_new_session=platform_compat.IS_POSIX,
+            creationflags=getattr(platform_compat, "CREATE_NEW_PROCESS_GROUP", 0),
+        )
+        self._pid = self._process.pid
+        if self._process.stderr:
+            self._stderr_task = asyncio.ensure_future(
+                self._drain_stderr(self._process.stderr)
+            )
+
+    # ponytail: no cgroup scope, no _track_pid/_track_child_pids registration,
+    # no _resolve_spawn_env (SSH_AUTH_SOCK/KRB5 refresh) — upstream applies
+    # those to kiro-cli. Ceiling: an opencode tree that escapes the killpg is
+    # not reaped by the orphan sweep. Add the tracking calls if that shows up.
+    AcpClient._start_process = _start_process
 
     # ── _spawn — add OpenCode branch ──
     _orig_spawn = AcpClient._spawn
