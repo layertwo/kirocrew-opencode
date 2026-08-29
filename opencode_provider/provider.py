@@ -16,6 +16,7 @@ Called by ``install.py`` at install time.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 from typing import Any
@@ -330,6 +331,40 @@ def patch_provider() -> None:
     logger.info("opencode_provider: AcpProvider patched ✅")
 
 
+def _refreshes_raw_params(parse_session_update) -> bool:  # type: ignore[no-untyped-def]
+    """Does upstream already refresh raw_params_cache on a tool_call_update?
+
+    Probed rather than version-checked, so the patch retires itself whenever
+    upstream fixes this — no version table to keep current.
+    """
+    probe: dict[str, Any] = {}
+    kwargs: dict[str, Any] = {
+        "tool_input_cache": {},
+        "shell_cache": {},
+        "raw_params_cache": probe,
+        "mcp_server_name_cache": {},
+        "tool_name_cache": {},
+    }
+    params = inspect.signature(parse_session_update).parameters
+    if "cache_scope" in params:
+        kwargs["cache_scope"] = "opencode-provider-probe"
+    try:
+        parse_session_update(
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "opencode-provider-probe",
+                "rawInput": {"probe": True},
+            },
+            **kwargs,
+        )
+    except Exception:
+        logger.warning(
+            "opencode_provider: raw_params probe failed — applying patch", exc_info=True
+        )
+        return False
+    return bool(probe)
+
+
 def patch_dispatch_raw_params() -> None:
     """Fix raw_params_cache refresh in _build_tool_refinement_event.
 
@@ -340,6 +375,10 @@ def patch_dispatch_raw_params() -> None:
     0.3.0's parse_session_update calls _build_tool_refinement_event WITHOUT
     passing raw_params_cache, so we patch parse_session_update itself to
     manually refresh the cache after calling the original.
+
+    Retires itself where upstream has fixed this (0.4.1 refreshes the cache
+    under a session-scoped key): applying the patch there would write a second,
+    unscoped key that nothing reads.
     """
     try:
         from kiro_crew.acp import _dispatch
@@ -349,23 +388,20 @@ def patch_dispatch_raw_params() -> None:
 
     _orig_parse = _dispatch.parse_session_update
 
-    def parse_session_update(  # type: ignore[no-untyped-def]
-        update,
-        *,
-        tool_input_cache=None,
-        shell_cache=None,
-        raw_params_cache=None,
-        mcp_server_name_cache=None,
-        tool_name_cache=None,
-    ):
-        events = _orig_parse(
-            update,
-            tool_input_cache=tool_input_cache,
-            shell_cache=shell_cache,
-            raw_params_cache=raw_params_cache,
-            mcp_server_name_cache=mcp_server_name_cache,
-            tool_name_cache=tool_name_cache,
+    if _refreshes_raw_params(_orig_parse):
+        logger.info(
+            "opencode_provider: upstream already refreshes raw_params_cache — "
+            "skipping raw_params fix"
         )
+        return
+
+    # **kwargs rather than re-declaring upstream's keyword-only parameters:
+    # this wrapper IS parse_session_update once installed, so upstream's own
+    # callers hit it. Spelling the list out turns an additive upstream change
+    # into a TypeError at every call site — 0.4.1 added cache_scope, and
+    # session_handle.py passes it on the tool_call_update path.
+    def parse_session_update(update, *, raw_params_cache=None, **kwargs):  # type: ignore[no-untyped-def]
+        events = _orig_parse(update, raw_params_cache=raw_params_cache, **kwargs)
         # The original parse_session_update does NOT pass raw_params_cache to
         # _build_tool_refinement_event, so manually refresh from the update dict.
         if (
