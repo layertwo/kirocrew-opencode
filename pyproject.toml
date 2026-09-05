@@ -24,7 +24,7 @@ gateway = "gateway:_entry"
 # Renovate reads the tag from here (github-tags datasource) and bumps it.
 # A PEP 508 `pkg @ git+...` in project.dependencies is invisible to it.
 [tool.uv.sources]
-kirocrew = { git = "https://github.com/kirodotdev/KiroCrew.git", tag = "v0.4.1" }
+kirocrew = { git = "https://github.com/kirodotdev/KiroCrew.git", tag = "v0.5.0" }
 
 [tool.setuptools]
 packages = ["opencode_provider"]
