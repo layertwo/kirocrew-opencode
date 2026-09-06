@@ -10,7 +10,7 @@
 # Run:
 #   docker run -e KIROCREW_ACP_BACKEND=opencode \
 #     -e OPENCODE_AUTH_CONTENT='...' \
-#     -p 3000:3000 kirocrew-opencode
+#     -p 5476:5476 kirocrew-opencode
 
 # ─────────────────────────────────────────────────────────────
 # Stage 1: install opencode (Node CLI)
@@ -65,6 +65,15 @@ COPY --from=kirocrew-stage /usr/local /usr/local
 # Set the ACP backend to opencode (the factory reads this env var).
 ENV KIROCREW_ACP_BACKEND=opencode
 
+# Bind all interfaces INSIDE the container netns — parity with the official
+# kirocrew image, which upstream's bind_address_for() docstring names as the
+# reference. Without it the gateway binds loopback, so a published port or a
+# kubelet probe dialing the pod IP gets connection-refused and the deployment
+# never goes Ready. Exposes nothing beyond what -p / the Service publishes:
+# token auth is mounted unconditionally, and only the token-exempt PROBE_PATHS
+# (/api/health) answer unauthenticated.
+ENV KIROCREW_BIND=0.0.0.0
+
 # OpenCode config: auth and permissions.
 # OPENCODE_AUTH_CONTENT is the JSON content of auth.json (passed at runtime).
 # OPENCODE_CONFIG is the path to the opencode.json config file.
@@ -72,7 +81,8 @@ ENV OPENCODE_CONFIG=/config/opencode.json
 
 WORKDIR /home/kirocrew/.kiro/crew/workspace
 
-EXPOSE 3000
+# The gateway's dashboard/API port (kiro_crew's default), not 3000.
+EXPOSE 5476
 
 # Use the patched gateway entry point (install() then kirocrew gateway).
 ENTRYPOINT ["gateway"]

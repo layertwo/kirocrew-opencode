@@ -81,7 +81,10 @@ def mock_kiro_crew(request):
 
     class MockKiroCrewConfig:
         def create_provider_factory(self):
-            def factory(**kwargs):
+            # Mirrors upstream's `_acp(session_key=None, agent=None, ...)`. A
+            # `**kwargs`-only mock here is what let a keyword-only wrapper ship:
+            # it encoded the same mistake as the code and then confirmed it.
+            def factory(session_key=None, agent=None, cwd=None, **kwargs):
                 return types.SimpleNamespace()
 
             return factory
@@ -159,5 +162,9 @@ def test_install_patches_factory(mock_kiro_crew, monkeypatch):
     loader_mod = sys.modules["kiro_crew.config.loader"]
     cfg = loader_mod.KiroCrewConfig()
     factory = cfg.create_provider_factory()
-    result = factory()
-    assert result is not None
+    assert factory() is not None
+    # Upstream passes the session key POSITIONALLY at all nine call sites
+    # (session.py:1336/1867/2176/2831/3326, cli_chat.py:273, eval/runner.py:263,
+    # eval/judge.py:58, auto_improvement agent_runner.py:1341).
+    assert factory("bg-session-key", agent="kiro") is not None
+    assert factory("", agent=None, cwd=None) is not None
