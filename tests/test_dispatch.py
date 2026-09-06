@@ -10,8 +10,6 @@ import types
 
 import pytest
 
-from opencode_provider._config import ACP_BACKEND_OPENCODE
-
 
 @pytest.fixture
 def mock_dispatch():

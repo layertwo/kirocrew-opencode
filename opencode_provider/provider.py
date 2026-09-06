@@ -22,7 +22,6 @@ import os
 from typing import Any
 
 from opencode_provider._config import (
-    ACP_BACKEND_OPENCODE,
     OPENCODE_SUBCMD,
     PROTOCOL_VERSION_OPENCODE,
     resolve_opencode_bin,
@@ -37,7 +36,7 @@ def patch_client() -> None:
     from kiro_crew.acp.types import ACP_BACKEND_OPENCODE
 
     # ── _is_opencode property ──
-    @property
+    @property  # type: ignore[misc]  # patched onto AcpClient, not declared in a class body
     def _is_opencode(self) -> bool:  # type: ignore[no-untyped-def]
         return self.backend == ACP_BACKEND_OPENCODE
 
@@ -216,7 +215,7 @@ def patch_client() -> None:
     # ── supports_steer — False for OpenCode ──
     _orig_supports_steer = AcpClient.supports_steer
 
-    @property
+    @property  # type: ignore[misc]  # patched onto AcpClient, not declared in a class body
     def supports_steer(self) -> bool:  # type: ignore[no-untyped-def]
         if self._is_opencode:
             return False
@@ -257,11 +256,17 @@ def patch_client() -> None:
     # ── stream_command — route through session/prompt for OpenCode ──
     _orig_stream_command = AcpClient.stream_command
 
-    async def stream_command(self, command: str, timeout: float = 60.0):  # type: ignore[no-untyped-def]
+    async def stream_command(self, command: str, timeout: float | None = None):  # type: ignore[no-untyped-def]
         if self._is_opencode:
+            from kiro_crew.acp.client import _effective_prompt_timeout_async
+
             self._cancelled = False
             await self.ensure_ready()
-            async for e in self._dispatch_events(await self._send_prompt(command), timeout):
+            # Upstream's signature takes float | None and resolves it before
+            # _dispatch_events, which requires a real float. Do the same — a
+            # caller using the default used to feed None straight through.
+            resolved = await _effective_prompt_timeout_async(timeout)
+            async for e in self._dispatch_events(await self._send_prompt(command), resolved):
                 yield e
             return
         async for e in _orig_stream_command(self, command, timeout):
@@ -283,7 +288,7 @@ def patch_provider() -> None:
     from kiro_crew.acp.types import ACP_BACKEND_OPENCODE
     from kiro_crew.providers.acp import AcpProvider
 
-    @property
+    @property  # type: ignore[misc]  # patched onto AcpProvider, not declared in a class body
     def is_opencode_backend(self) -> bool:  # type: ignore[no-untyped-def]
         return self._client.backend == ACP_BACKEND_OPENCODE
 

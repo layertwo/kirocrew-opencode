@@ -1,7 +1,5 @@
 """Tests for opencode_provider._config."""
 
-import os
-
 from opencode_provider._config import (
     ACP_BACKEND_OPENCODE,
     OPENCODE_BIN_DEFAULT,

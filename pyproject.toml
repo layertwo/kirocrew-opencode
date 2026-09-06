@@ -81,3 +81,61 @@ src = ["opencode_provider/", "tests/"]
 profile = "black"
 src_paths = ["opencode_provider/", "tests/"]
 line_length = 100
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = [
+    "E203",  # whitespace before ':'
+    "E266",  # too many leading '#' for block comment
+    "E501",  # line too long (handled by black)
+    "W503",  # line break before binary operator
+    "W504",  # line break after binary operator
+]
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    ".venv",
+    "venv",
+    ".eggs",
+    "*.egg-info",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".coverage",
+    "htmlcov",
+]
+per-file-ignores = [
+    "__init__.py:F401",  # imported but unused
+]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "C90", # mccabe complexity
+]
+
+[tool.mypy]
+check_untyped_defs = true
+show_error_codes = true
+pretty = true
+ignore_missing_imports = true
+files = ["opencode_provider/", "tests/"]
+exclude = [
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    "htmlcov",
+]
+
+# This package exists to monkey-patch kiro_crew: it rebinds upstream methods and
+# reads attributes install() grafts on at runtime. Both are invisible to mypy
+# reading the installed upstream, so the two codes are noise here, not signal.
+[[tool.mypy.overrides]]
+module = "opencode_provider.*"
+disable_error_code = ["method-assign", "attr-defined"]
+
+# Tests build a fake kiro_crew tree out of types.ModuleType and assign onto it.
+[[tool.mypy.overrides]]
+module = "tests.*"
+disable_error_code = ["attr-defined", "var-annotated"]

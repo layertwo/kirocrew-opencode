@@ -29,8 +29,6 @@ def reset_state():
 def mock_kiro_crew(request):
     """Inject a mock kiro_crew package into sys.modules with enough stubs
     for the install() orchestration + provider patches to succeed."""
-    # Build mock module tree
-    modules = {}
 
     kiro_crew = types.ModuleType("kiro_crew")
     kiro_crew_acp = types.ModuleType("kiro_crew.acp")
