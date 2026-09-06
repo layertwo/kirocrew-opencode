@@ -83,8 +83,15 @@ def _patch_factory() -> None:
     def create_provider_factory(self):  # type: ignore[no-untyped-def]
         factory = _orig_create(self)
 
-        def _wrapped_factory(**kwargs):
-            provider = factory(**kwargs)
+        # *args, not just **kwargs: upstream's returned factory declares
+        # `_acp(session_key=None, agent=None, ...)` and every one of its nine
+        # call sites passes the session key POSITIONALLY (session.py 1336/1867/
+        # 2176/2831/3326, cli_chat.py:273, eval/runner.py:263, eval/judge.py:58,
+        # auto_improvement agent_runner.py:1341). A keyword-only wrapper takes
+        # the whole gateway down with "takes 0 positional arguments but 1 was
+        # given" — background sessions, the warm pool, and every cold start.
+        def _wrapped_factory(*args, **kwargs):
+            provider = factory(*args, **kwargs)
             if hasattr(provider, "_client"):
                 provider._client._acp_backend = ACP_BACKEND_OPENCODE
             return provider

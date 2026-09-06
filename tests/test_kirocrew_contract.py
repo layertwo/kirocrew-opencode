@@ -143,6 +143,37 @@ WRAPPED: list[str] = [
 ]
 
 
+def _returned_factory_sig() -> inspect.Signature:
+    """Signature of the callable ``create_provider_factory()`` RETURNS.
+
+    WRAPPED below compares ``create_provider_factory`` itself, which is ``(self)``
+    both before and after install — a clean match, while the factory it returns
+    is what upstream actually calls. That blind spot shipped a gateway-wide
+    outage: our wrapper was keyword-only and every upstream call site passes the
+    session key positionally.
+
+    ``kiro_crew.acp.client`` is imported first because create_provider_factory
+    defers ``from kiro_crew.providers.acp import AcpProvider`` to call time, and
+    reaching that import through config.loader alone trips the
+    acp -> client -> session -> config.loader cycle.
+    """
+    import kiro_crew.acp.client  # noqa: F401
+    from kiro_crew.config.loader import KiroCrewConfig
+
+    return inspect.signature(KiroCrewConfig.load().create_provider_factory())
+
+
+def _positional_slots(sig: inspect.Signature) -> float:
+    """How many positional args *sig* accepts (inf when it declares *args)."""
+    kinds = [p.kind for p in sig.parameters.values()]
+    if inspect.Parameter.VAR_POSITIONAL in kinds:
+        return float("inf")
+    return sum(
+        k in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        for k in kinds
+    )
+
+
 def _resolve(path: str):
     """ "pkg.mod:Cls.attr" / "pkg.mod:attr" -> the object."""
     mod, _, rest = path.partition(":")
@@ -191,6 +222,12 @@ def _check() -> list[str]:
         except (ImportError, AttributeError, ValueError) as exc:
             problems.append(f"{path}: cannot read upstream signature ({exc})")
 
+    try:
+        upstream_factory = _returned_factory_sig()
+    except Exception as exc:  # noqa: BLE001 — any failure here is itself a contract break
+        problems.append(f"create_provider_factory(): cannot introspect returned factory ({exc})")
+        upstream_factory = None
+
     probe = before.get("kiro_crew.acp._dispatch:parse_session_update")
     if probe:
         for name in PROBE_KWARGS:
@@ -216,6 +253,36 @@ def _check() -> list[str]:
                 f"    upstream: {upstream}\n"
                 f"    patched:  {patched}"
             )
+
+    # Same comparison one level down: the factory create_provider_factory
+    # RETURNS. Positional arity is checked too, not just dropped names — the
+    # outage was a wrapper that kept every parameter and still rejected the
+    # session key because it declared them keyword-only.
+    if upstream_factory is not None:
+        try:
+            patched_factory = _returned_factory_sig()
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"create_provider_factory(): returned factory broke after install ({exc})")
+        else:
+            dropped = set(upstream_factory.parameters) - set(patched_factory.parameters)
+            has_kwargs = any(
+                p.kind is inspect.Parameter.VAR_KEYWORD
+                for p in patched_factory.parameters.values()
+            )
+            if dropped and not has_kwargs:
+                problems.append(
+                    f"create_provider_factory() returned factory: our wrapper drops upstream "
+                    f"parameter(s) {sorted(dropped)} — upstream callers passing them will raise "
+                    f"TypeError\n    upstream: {upstream_factory}\n    patched:  {patched_factory}"
+                )
+            want, got = _positional_slots(upstream_factory), _positional_slots(patched_factory)
+            if got < want:
+                problems.append(
+                    f"create_provider_factory() returned factory: our wrapper accepts {got} "
+                    f"positional arg(s), upstream accepts {want} — every upstream call site "
+                    f"passes the session key positionally and will raise TypeError\n"
+                    f"    upstream: {upstream_factory}\n    patched:  {patched_factory}"
+                )
 
     # Post-install: opencode is in KNOWN and in nothing else.
     from kiro_crew.acp import types as t
