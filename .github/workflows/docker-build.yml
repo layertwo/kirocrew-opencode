@@ -31,6 +31,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The KiroCrew git tag in pyproject.toml is what renovate bumps, so it is
+      # the version that actually describes what is inside the image.
+      - name: Read KiroCrew version
+        id: kirocrew
+        run: |
+          v=$(grep -oP '^kirocrew = .*tag = "v\K[^"]+' pyproject.toml)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -39,7 +47,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=sha,prefix=sha-
+            type=raw,value=${{ steps.kirocrew.outputs.version }},enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push
         uses: docker/build-push-action@v7
