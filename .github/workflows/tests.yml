@@ -18,7 +18,7 @@ jobs:
       # No floating major tag on this action — pin exact, renovate bumps it.
       - uses: astral-sh/setup-uv@v10.0.1
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           enable-cache: true
 
       - name: Install package + deps
