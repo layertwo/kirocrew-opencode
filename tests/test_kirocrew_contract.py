@@ -10,16 +10,14 @@ Runs in a subprocess: ``install()`` mutates kirocrew's classes process-wide and
 latches ``_installed``, so it needs an interpreter the other tests haven't
 touched.
 
-Covers module- and class-level symbols plus the signatures of everything we
-wrap. Instance attributes set in ``AcpClient.__init__`` (``_extra_env``,
-``_work_dir``, ``_tool_call_params`` …) are NOT covered — checking those needs a
-constructed client, which needs real config.
+One table per way a version bump breaks us; see each table's comment.
 """
 
 from __future__ import annotations
 
 import importlib
 import inspect
+import re
 import subprocess
 import sys
 
@@ -41,6 +39,8 @@ ATTRS: dict[str, list[str]] = {
         "_STDOUT_BUFFER_LIMIT",
         "KIROCREW_SPAWNED_ENV",
         "KIROCREW_SPAWNED_VALUE",
+        # used by our stream_command
+        "_effective_prompt_timeout_async",
     ],
     "kiro_crew.acp.client:AcpClient": [
         "backend",
@@ -74,9 +74,56 @@ ATTRS: dict[str, list[str]] = {
         "_to_llm_event",
     ],
     "kiro_crew.config.loader:KiroCrewConfig": ["create_provider_factory"],
-    "kiro_crew.session:SessionManager": ["_bg_provider_is_kiro"],
     "kiro_crew.acp._dispatch": ["parse_session_update"],
 }
+
+# Instance attributes our patches read or write, checked by scanning the
+# owner's __init__ source for `self.<name> =`. Static because constructing an
+# AcpClient needs real config; a rename still surfaces, which is the point.
+INIT_ATTRS: dict[str, list[str]] = {
+    "kiro_crew.acp.client:AcpClient": [
+        "_extra_env",  # _start_process
+        "_work_dir",  # _start_process, _spawn, _initialize_session
+        "_process",  # _start_process
+        "_pid",  # _start_process
+        "_stderr_task",  # _start_process
+        "_sandbox_mode",  # _spawn
+        "_sandbox_cleanup",  # _spawn
+        "_model",  # _initialize_session
+        "_resume_session_id",  # _initialize_session
+        "_can_load_session",  # _initialize_session
+        "_resumed",  # _initialize_session
+        "_session_id",  # _initialize_session
+        "_tool_call_params",  # _extract_tool_call_refinement
+        "_cancelled",  # stream_command
+    ],
+    "kiro_crew.providers.acp:AcpProvider": [
+        "_client",  # is_opencode_backend, start, stream_command
+    ],
+}
+
+# Keywords provider._refreshes_raw_params passes to parse_session_update.
+# WRAPPED catches params our patch drops; this catches ones upstream dropped
+# from under us — the probe would raise, get swallowed by its own except, and
+# re-apply a patch that had already retired itself.
+PROBE_KWARGS = (
+    "tool_input_cache",
+    "shell_cache",
+    "raw_params_cache",
+    "mcp_server_name_cache",
+    "tool_name_cache",
+)
+
+# Membership sets install.py deliberately leaves opencode out of. Each must
+# still exist (a rename means our exclusion stopped meaning anything) and must
+# still exclude opencode after install().
+EXCLUDED: list[str] = [
+    "ACP_BACKENDS_ACP_RUNTIME",  # in => _bg sessions bypass our patched factory
+    "ACP_BACKENDS_SESSION_SHARING",  # in => sessions multiplexed across a process
+    "ACP_BACKENDS_STEER",  # in => steer requests to an agent that has no steer
+    "ACP_BACKENDS_INTERNAL_SANDBOX",  # in => kiro-cli's sandbox wrap applied
+    "ACP_BACKENDS_KIRO_IDENTITY_STORE",  # in => kiro identity retirement sweeps us
+]
 
 # Callables we replace with a wrapper that mirrors the upstream signature.
 # Our replacement must keep accepting every parameter upstream declares,
@@ -93,7 +140,6 @@ WRAPPED: list[str] = [
     "kiro_crew.providers.acp:AcpProvider._apply_effort_overlay",
     "kiro_crew.providers.acp:AcpProvider._apply_tool_search_overlay",
     "kiro_crew.config.loader:KiroCrewConfig.create_provider_factory",
-    "kiro_crew.session:SessionManager._bg_provider_is_kiro",
 ]
 
 
@@ -122,6 +168,21 @@ def _check() -> list[str]:
             if not hasattr(target, attr):
                 problems.append(f"{owner}.{attr}: missing from installed kirocrew")
 
+    for owner, attrs in INIT_ATTRS.items():
+        try:
+            src = inspect.getsource(_resolve(owner).__init__)
+        except (ImportError, AttributeError, OSError, TypeError) as exc:
+            problems.append(f"{owner}.__init__: cannot read source ({exc})")
+            continue
+        # `self._x =`, `self._x: T =`, `self._x, self._y =` — not `==`.
+        assigned = set(re.findall(r"self\.(_[A-Za-z0-9_]+)\s*(?::[^=\n]+)?=(?!=)", src))
+        for attr in attrs:
+            if attr not in assigned:
+                problems.append(
+                    f"{owner}.{attr}: no longer assigned in __init__ — "
+                    f"our patches read it and will AttributeError"
+                )
+
     # Upstream signatures, captured before install() swaps the callables out.
     before = {}
     for path in WRAPPED:
@@ -129,6 +190,14 @@ def _check() -> list[str]:
             before[path] = inspect.signature(_resolve(path))
         except (ImportError, AttributeError, ValueError) as exc:
             problems.append(f"{path}: cannot read upstream signature ({exc})")
+
+    probe = before.get("kiro_crew.acp._dispatch:parse_session_update")
+    if probe:
+        for name in PROBE_KWARGS:
+            if name not in probe.parameters:
+                problems.append(
+                    f"parse_session_update: dropped keyword '{name}' our probe passes"
+                )
 
     from opencode_provider import install
 
@@ -147,6 +216,21 @@ def _check() -> list[str]:
                 f"    upstream: {upstream}\n"
                 f"    patched:  {patched}"
             )
+
+    # Post-install: opencode is in KNOWN and in nothing else.
+    from kiro_crew.acp import types as t
+
+    if "opencode" not in getattr(t, "ACP_BACKENDS_KNOWN", frozenset()):
+        problems.append("ACP_BACKENDS_KNOWN: install() failed to register opencode")
+    for name in EXCLUDED:
+        members = getattr(t, name, None)
+        if members is None:
+            problems.append(
+                f"acp.types.{name}: gone — install.py's exclusion no longer means "
+                f"anything; find what replaced it and re-check the exclusion"
+            )
+        elif "opencode" in members:
+            problems.append(f"acp.types.{name}: now contains opencode — must not")
 
     return problems
 

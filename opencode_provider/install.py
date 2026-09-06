@@ -34,7 +34,6 @@ def install() -> None:
 
     _patch_types()
     _patch_factory()
-    _patch_bg_sessions()
 
     from opencode_provider.provider import patch_client, patch_dispatch_raw_params, patch_provider
 
@@ -63,8 +62,15 @@ def _patch_types() -> None:
         logger.info("opencode_provider: added opencode to ACP_BACKENDS_KNOWN")
 
     # NOT added to ACP_BACKENDS_SESSION_SHARING, ACP_BACKENDS_STEER,
-    # ACP_BACKENDS_INTERNAL_SANDBOX, or ACP_BACKENDS_ACP_RUNTIME —
+    # ACP_BACKENDS_INTERNAL_SANDBOX, ACP_BACKENDS_ACP_RUNTIME, or
+    # ACP_BACKENDS_KIRO_IDENTITY_STORE —
     # OpenCode is one-process-per-session like claude, not multiplexed.
+    #
+    # Staying out of ACP_BACKENDS_ACP_RUNTIME is what routes _bg sessions
+    # (auto-title, link-summary) to SessionManager._provider_backed_bg_session
+    # and thus through our patched factory, instead of to kiro-cli → Anthropic.
+    # The exclusion above IS that patch. Contract test asserts the sets still
+    # exist and still exclude us.
 
 
 def _patch_factory() -> None:
@@ -87,19 +93,3 @@ def _patch_factory() -> None:
 
     KiroCrewConfig.create_provider_factory = create_provider_factory
     logger.info("opencode_provider: provider factory patched ✅")
-
-
-def _patch_bg_sessions() -> None:
-    """Patch _bg_provider_is_kiro so bg sessions route through the factory.
-
-    Without this, auto-title / link-summary calls bypass the patched factory
-    and hit kiro-cli → Anthropic, failing with quota errors when no Anthropic
-    key is configured.
-    """
-    from kiro_crew.session import SessionManager
-
-    def _bg_provider_is_not_kiro(self) -> bool:  # type: ignore[no-untyped-def]
-        return False
-
-    SessionManager._bg_provider_is_kiro = _bg_provider_is_not_kiro
-    logger.info("opencode_provider: bg session routing patched ✅")

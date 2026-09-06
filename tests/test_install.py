@@ -1,9 +1,11 @@
 """Tests for opencode_provider.install orchestration logic.
 
-Tests the install() entry point, _patch_types, _patch_factory, and
-_patch_bg_sessions using mock modules. The provider.py patches (AcpClient,
-AcpProvider, _dispatch) require a real kiro_crew install and are tested
-separately in test_dispatch.py.
+Tests the install() entry point, _patch_types and _patch_factory using mock
+modules. The provider.py patches (AcpClient, AcpProvider, _dispatch) require a
+real kiro_crew install and are tested separately in test_dispatch.py.
+
+Because the mocks are fabricated here, nothing in this file can fail on an
+upstream change — that is test_kirocrew_contract.py's job.
 """
 
 import sys
@@ -86,18 +88,9 @@ def mock_kiro_crew(request):
 
     kiro_crew_config_loader.KiroCrewConfig = MockKiroCrewConfig
 
-    kiro_crew_session = types.ModuleType("kiro_crew.session")
-
-    class MockSessionManager:
-        def _bg_provider_is_kiro(self):
-            return True
-
-    kiro_crew_session.SessionManager = MockSessionManager
-
     # Wire the tree
     kiro_crew.acp = kiro_crew_acp
     kiro_crew.config = kiro_crew_config
-    kiro_crew.session = kiro_crew_session
     kiro_crew_acp.types = kiro_crew_acp_types
     kiro_crew_acp.client = kiro_crew_acp_client
     kiro_crew_acp._dispatch = kiro_crew_acp_dispatch
@@ -112,7 +105,6 @@ def mock_kiro_crew(request):
         "kiro_crew.acp._dispatch",
         "kiro_crew.config",
         "kiro_crew.config.loader",
-        "kiro_crew.session",
         "kiro_crew.providers",
         "kiro_crew.providers.acp",
     ]
@@ -124,7 +116,6 @@ def mock_kiro_crew(request):
     sys.modules["kiro_crew.acp._dispatch"] = kiro_crew_acp_dispatch
     sys.modules["kiro_crew.config"] = kiro_crew_config
     sys.modules["kiro_crew.config.loader"] = kiro_crew_config_loader
-    sys.modules["kiro_crew.session"] = kiro_crew_session
     sys.modules["kiro_crew.providers"] = kiro_crew_providers
     sys.modules["kiro_crew.providers.acp"] = kiro_crew_providers_acp
 
@@ -161,20 +152,6 @@ def test_install_is_idempotent(mock_kiro_crew, monkeypatch):
     assert is_installed() is True
 
 
-def test_install_patches_bg_sessions(mock_kiro_crew, monkeypatch):
-    monkeypatch.setenv("KIROCREW_ACP_BACKEND", "opencode")
-    assert not is_installed(), "_installed should be False before install()"
-    install()
-    assert is_installed(), "_installed should be True after install()"
-
-    session_mod = sys.modules["kiro_crew.session"]
-    SessionManager = session_mod.SessionManager
-    assert SessionManager.__name__ == "MockSessionManager", f"got {SessionManager}"
-    mgr = SessionManager()
-    result = mgr._bg_provider_is_kiro()
-    assert result is False, f"expected False, got {result}"
-
-
 def test_install_patches_factory(mock_kiro_crew, monkeypatch):
     monkeypatch.setenv("KIROCREW_ACP_BACKEND", "opencode")
     install()
@@ -184,13 +161,3 @@ def test_install_patches_factory(mock_kiro_crew, monkeypatch):
     factory = cfg.create_provider_factory()
     result = factory()
     assert result is not None
-
-
-def test_opencode_not_in_sharing_set(mock_kiro_crew, monkeypatch):
-    """OpenCode must NOT be in ACP_BACKENDS_SESSION_SHARING or STEER."""
-    monkeypatch.setenv("KIROCREW_ACP_BACKEND", "opencode")
-    install()
-
-    types_mod = sys.modules["kiro_crew.acp.types"]
-    assert "opencode" not in types_mod.ACP_BACKENDS_SESSION_SHARING
-    assert "opencode" not in types_mod.ACP_BACKENDS_STEER
