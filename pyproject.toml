@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "opencode-provider"
 version = "0.1.0"
-description = "OpenCode ACP backend for KiroCrew — monkey-patches at runtime, no source diffs"
-requires-python = ">=3.10"
+description = "OpenCode ACP backend for KiroCrew"
+requires-python = ">=3.14"
 license = {text = "MIT"}
 dependencies = [
     "kirocrew",
@@ -14,8 +14,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
+    "pytest==9.1.1",
     "pytest-asyncio>=0.23",
+    "pytest-cov==7.1.0",
+    "pytest-xdist==3.8.0",
+    "black==26.5.1",
+    "isort==8.0.1",
+    "flake8==7.3.0",
+    "Flake8-pyproject==1.2.4",
+    "mypy==2.3.0",
 ]
 
 [project.scripts]
@@ -29,3 +36,48 @@ kirocrew = { git = "https://github.com/kirodotdev/KiroCrew.git", tag = "v0.4.1" 
 [tool.setuptools]
 packages = ["opencode_provider"]
 py-modules = ["gateway"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--verbose",
+    "--cov=opencode_provider",
+    "--cov-report=term-missing",
+    "--cov-report=term",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "-n=auto"
+]
+
+[tool.coverage.run]
+source = ["opencode_provider"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/generated/*",
+]
+branch = true
+parallel = true
+relative_files = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: nocover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "pass",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py314"]
+src = ["opencode_provider/", "tests/"]
+
+[tool.isort]
+profile = "black"
+src_paths = ["opencode_provider/", "tests/"]
+line_length = 100

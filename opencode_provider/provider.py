@@ -21,10 +21,10 @@ import logging
 import os
 from typing import Any
 
-from ._config import (
+from opencode_provider._config import (
     ACP_BACKEND_OPENCODE,
-    PROTOCOL_VERSION_OPENCODE,
     OPENCODE_SUBCMD,
+    PROTOCOL_VERSION_OPENCODE,
     resolve_opencode_bin,
 )
 
@@ -81,9 +81,7 @@ def patch_client() -> None:
         )
         self._pid = self._process.pid
         if self._process.stderr:
-            self._stderr_task = asyncio.ensure_future(
-                self._drain_stderr(self._process.stderr)
-            )
+            self._stderr_task = asyncio.ensure_future(self._drain_stderr(self._process.stderr))
 
     # ponytail: no cgroup scope, no _track_pid/_track_child_pids registration,
     # no _resolve_spawn_env (SSH_AUTH_SOCK/KRB5 refresh) — upstream applies
@@ -100,11 +98,11 @@ def patch_client() -> None:
             opencode_bin = await asyncio.to_thread(resolve_opencode_bin)
             if not opencode_bin:
                 from kiro_crew.acp.client import AcpError
-                raise AcpError(
-                    "opencode not found in PATH (set OPENCODE_BIN or install opencode)"
-                )
+
+                raise AcpError("opencode not found in PATH (set OPENCODE_BIN or install opencode)")
             argv = [opencode_bin, OPENCODE_SUBCMD, "--cwd", str(self._work_dir)]
             from kiro_crew.acp.client import wrap_argv
+
             argv, self._sandbox_cleanup = wrap_argv(
                 argv,
                 mode=self._sandbox_mode,
@@ -125,11 +123,11 @@ def patch_client() -> None:
             return await _orig_init(self)
 
         from kiro_crew.acp.client import (
-            METHOD_INITIALIZE,
+            _INIT_TIMEOUT,
+            ACP_CLIENT_CAPABILITIES,
             CLIENT_NAME,
             CLIENT_VERSION,
-            ACP_CLIENT_CAPABILITIES,
-            _INIT_TIMEOUT,
+            METHOD_INITIALIZE,
         )
 
         init_id = await self._send_request(
@@ -161,9 +159,8 @@ def patch_client() -> None:
 
         if resume_sid and self._can_load_session:
             from kiro_crew.acp.client import METHOD_SESSION_LOAD
-            load_id = await self._send_request(
-                METHOD_SESSION_LOAD, {"sessionId": resume_sid}
-            )
+
+            load_id = await self._send_request(METHOD_SESSION_LOAD, {"sessionId": resume_sid})
             load_resp = await self._wait_for_response(load_id, timeout=_INIT_TIMEOUT)
             if not load_resp.get("error"):
                 self._session_id = resume_sid
@@ -178,10 +175,12 @@ def patch_client() -> None:
             if config_opts:
                 new_params["configOptions"] = config_opts
             from kiro_crew.acp.client import METHOD_SESSION_NEW
+
             new_id = await self._send_request(METHOD_SESSION_NEW, new_params)
             session_resp = await self._wait_for_response(new_id, timeout=_INIT_TIMEOUT)
             if session_resp.get("error"):
                 from kiro_crew.acp.client import AcpError
+
                 raise AcpError(f"session/new failed: {session_resp['error']}")
             self._session_id = session_resp.get("sessionId", "")
 
@@ -191,7 +190,9 @@ def patch_client() -> None:
             try:
                 await self._send_request("session/set_model", {"model": self._model})
             except Exception:
-                logger.warning("OpenCode: session/set_model failed (model=%s)", self._model, exc_info=True)
+                logger.warning(
+                    "OpenCode: session/set_model failed (model=%s)", self._model, exc_info=True
+                )
 
     AcpClient._initialize_session = _initialize_session
 
@@ -260,9 +261,7 @@ def patch_client() -> None:
         if self._is_opencode:
             self._cancelled = False
             await self.ensure_ready()
-            async for e in self._dispatch_events(
-                await self._send_prompt(command), timeout
-            ):
+            async for e in self._dispatch_events(await self._send_prompt(command), timeout):
                 yield e
             return
         async for e in _orig_stream_command(self, command, timeout):
@@ -281,8 +280,8 @@ def patch_provider() -> None:
     membership checks already exclude it — we only need is_opencode_backend
     and to route start() through AcpClient.ensure_ready().
     """
-    from kiro_crew.providers.acp import AcpProvider
     from kiro_crew.acp.types import ACP_BACKEND_OPENCODE
+    from kiro_crew.providers.acp import AcpProvider
 
     @property
     def is_opencode_backend(self) -> bool:  # type: ignore[no-untyped-def]
@@ -358,9 +357,7 @@ def _refreshes_raw_params(parse_session_update) -> bool:  # type: ignore[no-unty
             **kwargs,
         )
     except Exception:
-        logger.warning(
-            "opencode_provider: raw_params probe failed — applying patch", exc_info=True
-        )
+        logger.warning("opencode_provider: raw_params probe failed — applying patch", exc_info=True)
         return False
     return bool(probe)
 

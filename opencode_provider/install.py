@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from ._config import ACP_BACKEND_OPENCODE, is_opencode_selected
+from opencode_provider._config import ACP_BACKEND_OPENCODE, is_opencode_selected
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +29,14 @@ def install() -> None:
     if _installed:
         return
     if not is_opencode_selected():
-        logger.info(
-            "opencode_provider: KIROCREW_ACP_BACKEND != 'opencode' — skipping install"
-        )
+        logger.info("opencode_provider: KIROCREW_ACP_BACKEND != 'opencode' — skipping install")
         return
 
     _patch_types()
     _patch_factory()
     _patch_bg_sessions()
 
-    from .provider import patch_client, patch_provider, patch_dispatch_raw_params
+    from opencode_provider.provider import patch_client, patch_dispatch_raw_params, patch_provider
 
     patch_client()
     patch_provider()
@@ -71,8 +69,8 @@ def _patch_types() -> None:
 
 def _patch_factory() -> None:
     """Patch the provider factory to inject acp_backend=opencode."""
-    from kiro_crew.config.loader import KiroCrewConfig
     from kiro_crew.acp.types import ACP_BACKEND_OPENCODE
+    from kiro_crew.config.loader import KiroCrewConfig
 
     _orig_create = KiroCrewConfig.create_provider_factory
 

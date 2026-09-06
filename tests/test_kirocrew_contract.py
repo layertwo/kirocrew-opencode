@@ -27,27 +27,51 @@ import sys
 ATTRS: dict[str, list[str]] = {
     "kiro_crew.acp.types": ["ACP_BACKENDS_KNOWN"],
     "kiro_crew.acp.client": [
-        "AcpClient", "AcpError", "wrap_argv", "METHOD_INITIALIZE", "CLIENT_NAME",
-        "CLIENT_VERSION", "ACP_CLIENT_CAPABILITIES", "_INIT_TIMEOUT",
-        "METHOD_SESSION_LOAD", "METHOD_SESSION_NEW",
+        "AcpClient",
+        "AcpError",
+        "wrap_argv",
+        "METHOD_INITIALIZE",
+        "CLIENT_NAME",
+        "CLIENT_VERSION",
+        "ACP_CLIENT_CAPABILITIES",
+        "_INIT_TIMEOUT",
+        "METHOD_SESSION_LOAD",
+        "METHOD_SESSION_NEW",
         # used by our _start_process
-        "_STDOUT_BUFFER_LIMIT", "KIROCREW_SPAWNED_ENV", "KIROCREW_SPAWNED_VALUE",
+        "_STDOUT_BUFFER_LIMIT",
+        "KIROCREW_SPAWNED_ENV",
+        "KIROCREW_SPAWNED_VALUE",
     ],
     "kiro_crew.acp.client:AcpClient": [
-        "backend", "_spawn", "_initialize_session",
-        "_extract_tool_call_refinement", "supports_steer",
-        "_reject_unknown_server_request", "send_command", "stream_command",
-        "_send_request", "_wait_for_response", "_send_response", "_send_prompt",
-        "_read_prompt_response", "_dispatch_events", "ensure_ready",
-        "_pooled_mcp_servers", "_capture_available_models", "stream_events",
+        "backend",
+        "_spawn",
+        "_initialize_session",
+        "_extract_tool_call_refinement",
+        "supports_steer",
+        "_reject_unknown_server_request",
+        "send_command",
+        "stream_command",
+        "_send_request",
+        "_wait_for_response",
+        "_send_response",
+        "_send_prompt",
+        "_read_prompt_response",
+        "_dispatch_events",
+        "ensure_ready",
+        "_pooled_mcp_servers",
+        "_capture_available_models",
+        "stream_events",
         "_drain_stderr",
     ],
     "kiro_crew.sandbox": ["create_subprocess_limited", "scrub_agent_denied_env", "wrap_argv"],
     "kiro_crew.env": ["augmented_path"],
     "kiro_crew.platform_compat": ["IS_POSIX"],
     "kiro_crew.providers.acp:AcpProvider": [
-        "start", "_apply_effort_overlay", "_apply_tool_search_overlay",
-        "stream_command", "_to_llm_event",
+        "start",
+        "_apply_effort_overlay",
+        "_apply_tool_search_overlay",
+        "stream_command",
+        "_to_llm_event",
     ],
     "kiro_crew.config.loader:KiroCrewConfig": ["create_provider_factory"],
     "kiro_crew.session:SessionManager": ["_bg_provider_is_kiro"],
@@ -74,7 +98,7 @@ WRAPPED: list[str] = [
 
 
 def _resolve(path: str):
-    """"pkg.mod:Cls.attr" / "pkg.mod:attr" -> the object."""
+    """ "pkg.mod:Cls.attr" / "pkg.mod:attr" -> the object."""
     mod, _, rest = path.partition(":")
     obj = importlib.import_module(mod)
     for part in filter(None, rest.split(".")):
@@ -129,9 +153,7 @@ def _check() -> list[str]:
 
 def test_kirocrew_contract():
     """The symbols we monkey-patch still exist and still take the same arguments."""
-    proc = subprocess.run(
-        [sys.executable, __file__], capture_output=True, text=True, timeout=120
-    )
+    proc = subprocess.run([sys.executable, __file__], capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, "\n" + proc.stdout + proc.stderr
 
 

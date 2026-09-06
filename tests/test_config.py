@@ -4,9 +4,9 @@ import os
 
 from opencode_provider._config import (
     ACP_BACKEND_OPENCODE,
-    PROTOCOL_VERSION_OPENCODE,
     OPENCODE_BIN_DEFAULT,
     OPENCODE_SUBCMD,
+    PROTOCOL_VERSION_OPENCODE,
     is_opencode_selected,
     resolve_opencode_bin,
 )

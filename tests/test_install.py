@@ -18,6 +18,7 @@ from opencode_provider import install, is_installed
 def reset_state():
     """Reset the _installed flag before AND after each test."""
     import importlib
+
     mod = importlib.import_module("opencode_provider.install")
     mod._installed = False
     yield
@@ -82,6 +83,7 @@ def mock_kiro_crew(request):
         def create_provider_factory(self):
             def factory(**kwargs):
                 return types.SimpleNamespace()
+
             return factory
 
     kiro_crew_config_loader.KiroCrewConfig = MockKiroCrewConfig
@@ -105,11 +107,16 @@ def mock_kiro_crew(request):
 
     # Save and install all
     names = [
-        "kiro_crew", "kiro_crew.acp", "kiro_crew.acp.types",
-        "kiro_crew.acp.client", "kiro_crew.acp._dispatch",
-        "kiro_crew.config", "kiro_crew.config.loader",
+        "kiro_crew",
+        "kiro_crew.acp",
+        "kiro_crew.acp.types",
+        "kiro_crew.acp.client",
+        "kiro_crew.acp._dispatch",
+        "kiro_crew.config",
+        "kiro_crew.config.loader",
         "kiro_crew.session",
-        "kiro_crew.providers", "kiro_crew.providers.acp",
+        "kiro_crew.providers",
+        "kiro_crew.providers.acp",
     ]
     saved = {n: sys.modules.get(n) for n in names}
     sys.modules["kiro_crew"] = kiro_crew
