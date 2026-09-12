@@ -104,5 +104,15 @@ jobs:
           ui = Path(kiro_crew.__file__).parent / "static" / "dist" / "index.html"
           assert ui.is_file(), f"dashboard UI missing from image: {ui}"
 
+          # No kiro-cli exists in this image, so the readiness gate it drives can
+          # never pass by probing: unpatched, the dashboard serves its install
+          # gate and /v1/chat/completions 503s with kiro_prerequisite_required.
+          # Assert the patch (install.py) really took effect in the image.
+          from kiro_crew.kiro_prerequisite import KiroPrerequisiteService
+          snapshot = KiroPrerequisiteService(environ={})._snapshot_dict()
+          assert snapshot["ready"] and snapshot["initial_setup_complete"], (
+              f"kiro-cli readiness gate not bypassed: {snapshot}"
+          )
+
           print("smoke ok")
           PY

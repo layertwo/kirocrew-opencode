@@ -80,6 +80,16 @@ def mock_kiro_crew(request):
     kiro_crew_acp_dispatch._build_tool_refinement_event = lambda *a, **kw: None
     kiro_crew_acp_dispatch.parse_session_update = lambda *a, **kw: []
 
+    kiro_crew_prerequisite = types.ModuleType("kiro_crew.kiro_prerequisite")
+
+    class KiroPrerequisiteService:
+        # Keyword-only, like upstream's — install.py's patch relies on that and
+        # the contract test pins it against the real class.
+        def __init__(self, *, assume_ready: bool = False, **kwargs):
+            self.assume_ready = assume_ready
+
+    kiro_crew_prerequisite.KiroPrerequisiteService = KiroPrerequisiteService
+
     kiro_crew_config = types.ModuleType("kiro_crew.config")
     kiro_crew_config_loader = types.ModuleType("kiro_crew.config.loader")
 
@@ -98,6 +108,7 @@ def mock_kiro_crew(request):
     # Wire the tree
     kiro_crew.acp = kiro_crew_acp
     kiro_crew.config = kiro_crew_config
+    kiro_crew.kiro_prerequisite = kiro_crew_prerequisite
     kiro_crew_acp.types = kiro_crew_acp_types
     kiro_crew_acp.client = kiro_crew_acp_client
     kiro_crew_acp._dispatch = kiro_crew_acp_dispatch
@@ -112,6 +123,7 @@ def mock_kiro_crew(request):
         "kiro_crew.acp._dispatch",
         "kiro_crew.config",
         "kiro_crew.config.loader",
+        "kiro_crew.kiro_prerequisite",
         "kiro_crew.providers",
         "kiro_crew.providers.acp",
     ]
@@ -122,6 +134,7 @@ def mock_kiro_crew(request):
     sys.modules["kiro_crew.acp.client"] = kiro_crew_acp_client
     sys.modules["kiro_crew.acp._dispatch"] = kiro_crew_acp_dispatch
     sys.modules["kiro_crew.config"] = kiro_crew_config
+    sys.modules["kiro_crew.kiro_prerequisite"] = kiro_crew_prerequisite
     sys.modules["kiro_crew.config.loader"] = kiro_crew_config_loader
     sys.modules["kiro_crew.providers"] = kiro_crew_providers
     sys.modules["kiro_crew.providers.acp"] = kiro_crew_providers_acp

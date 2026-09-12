@@ -74,6 +74,13 @@ ATTRS: dict[str, list[str]] = {
         "_to_llm_event",
     ],
     "kiro_crew.config.loader:KiroCrewConfig": ["create_provider_factory"],
+    "kiro_crew.kiro_prerequisite:KiroPrerequisiteService": [
+        "__init__",  # patched to force assume_ready
+        "snapshot",  # the payload the SPA gate branches on
+        "session_ready",  # gates poll-driven spawn sites
+        "verified_ready",  # gates the reruns and POST /v1/chat/completions
+        "initial_setup_complete",
+    ],
     "kiro_crew.acp._dispatch": ["parse_session_update"],
 }
 
@@ -140,6 +147,7 @@ WRAPPED: list[str] = [
     "kiro_crew.providers.acp:AcpProvider._apply_effort_overlay",
     "kiro_crew.providers.acp:AcpProvider._apply_tool_search_overlay",
     "kiro_crew.config.loader:KiroCrewConfig.create_provider_factory",
+    "kiro_crew.kiro_prerequisite:KiroPrerequisiteService.__init__",
 ]
 
 
@@ -232,6 +240,77 @@ def _spawn_wrap_problem(problems: list[str]) -> None:
 
     if not launched or "/bin/true" not in launched[0]:
         problems.append(f"AcpClient._spawn: finished without launching opencode (argv={launched})")
+
+
+def _prerequisite_gate_problem(problems: list[str]) -> None:
+    """The kiro-cli readiness gate must not fire: this image has no kiro-cli.
+
+    Upstream derives readiness from the kiro-cli binary, and our backend is
+    opencode — there is deliberately no kiro-cli to find. On a fresh data home
+    that makes two of upstream's gates fire at a container that is working
+    exactly as designed:
+
+    * the dashboard SPA renders its "install kiro-cli" first-run gate instead of
+      the app, because it branches on ``ready`` / ``initial_setup_complete``
+      (``static/dist`` bundle, branch order in components/KiroPrerequisiteGate);
+    * ``reject_if_kiro_unverified`` answers 503 for ``/api/models``, the
+      destructive reruns (regenerate / edit-resend / rewind) and
+      ``POST /v1/chat/completions`` — the last of which is the endpoint an
+      OpenAI-compatible client talks to, so the container's headline use case
+      breaks.
+
+    So construct the real service against an empty data home, exactly as the
+    dashboard does, and require the payload the SPA reads to describe a usable
+    install. The predicates behind the 503s are checked too; nothing in this
+    image can satisfy them by probing, so they must be answered without one.
+    """
+    import asyncio
+    import tempfile
+    from pathlib import Path
+
+    from kiro_crew.kiro_prerequisite import KiroPrerequisiteService
+
+    home = Path(tempfile.mkdtemp())
+
+    async def snapshot() -> dict[str, object]:
+        # An empty data home: a first boot with a fresh volume, which is the
+        # default for a container and the state the gate fires on.
+        with tempfile.TemporaryDirectory() as data_home:
+            service = KiroPrerequisiteService(
+                home=home,
+                data_home=Path(data_home),
+                environ={},  # no KIROCREW_HOME leaking in from the caller
+            )
+            payload = dict(await service.snapshot())
+            payload["session_ready"] = await service.session_ready()
+            payload["verified_ready"] = await service.verified_ready(max_age_secs=0.0)
+            return payload
+
+    payload = asyncio.run(snapshot())
+
+    consequences = {
+        "ready": "the SPA falls through to its first-run gate, and every "
+        "reject_if_kiro_unverified route answers 503 (including POST /v1/chat/completions)",
+        "initial_setup_complete": "the SPA renders the install-kiro-cli gate, not the app",
+        "session_ready": "poll-driven spawn sites stay gated",
+        "verified_ready": "regenerate / edit-resend / rewind answer 503",
+    }
+    for key, consequence in consequences.items():
+        if not payload.get(key):
+            problems.append(
+                f"KiroPrerequisiteService reports {key}={payload.get(key)!r} for an "
+                f"opencode gateway with no kiro-cli — {consequence}"
+            )
+
+    # Explicitly False, not merely absent: the key itself is newer than some
+    # supported versions, and only `acp_supported === false` routes the SPA to
+    # its "Kiro CLI update needed" gate (checked BEFORE initial_setup_complete).
+    if payload.get("acp_supported") is False:
+        problems.append(
+            "KiroPrerequisiteService reports acp_supported=False for an opencode "
+            "gateway — the SPA renders its 'Kiro CLI update needed' gate, which is "
+            "checked BEFORE initial_setup_complete"
+        )
 
 
 def _check() -> list[str]:
@@ -351,6 +430,7 @@ def _check() -> list[str]:
             problems.append(f"acp.types.{name}: now contains opencode — must not")
 
     _spawn_wrap_problem(problems)
+    _prerequisite_gate_problem(problems)
 
     return problems
 
