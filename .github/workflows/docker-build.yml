@@ -93,5 +93,16 @@ jobs:
           assert hasattr(AcpProvider, "is_opencode_backend"), "AcpProvider patch missing"
 
           import kiro_crew.cli  # what gateway.py imports after install()
+
+          # The dashboard SPA is served from <kiro_crew>/static/dist and ships
+          # ONLY in upstream's release wheel — the git tag it is pinned to has no
+          # such directory. Assert the image carries it, so reinstalling kirocrew
+          # from the git source (which would silently drop the frontend and serve
+          # the "not built" page) fails here instead of at runtime.
+          from pathlib import Path
+          import kiro_crew
+          ui = Path(kiro_crew.__file__).parent / "static" / "dist" / "index.html"
+          assert ui.is_file(), f"dashboard UI missing from image: {ui}"
+
           print("smoke ok")
           PY
