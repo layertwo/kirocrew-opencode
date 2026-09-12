@@ -5,7 +5,10 @@ Run [KiroCrew](https://github.com/kirodotdev/KiroCrew) with
 patches. Runtime monkey-patching, inspired by
 [lenovo1996/KiroCrew-OpenAI-Compatible](https://github.com/lenovo1996/KiroCrew-OpenAI-Compatible).
 
-Pinned to KiroCrew **v0.4.1** (see `[tool.uv.sources]` in `pyproject.toml`).
+KiroCrew is pinned in `[tool.uv.sources]` in `pyproject.toml` (no version is
+repeated here — it changes independently of this file). The Docker image
+installs the matching upstream **release wheel** rather than the git tag — see
+[Docker](#docker).
 
 ## How it works
 
@@ -85,9 +88,22 @@ docker run -d \
   -e KIROCREW_ACP_BACKEND=opencode \
   -v /path/to/opencode.json:/config/opencode.json:ro \
   -v /path/to/auth.json:/root/.local/share/opencode/auth.json:ro \
-  -p 3000:3000 \
+  -p 5476:5476 \
   kirocrew-opencode
 ```
+
+The dashboard is then at `http://localhost:5476/` (5476 is KiroCrew's own
+default port, not 3000).
+
+**The UI comes from the wheel, not the git tag.** The dashboard SPA is served
+from `<site-packages>/kiro_crew/static/dist`, and that directory exists **only
+in upstream's release wheel** — `src/kiro_crew/static/dist` is a gitignored
+build artifact, so the pinned git tag's tree has Python but no frontend. That is
+why the Dockerfile installs the versioned wheel from the GitHub release (and
+`uv pip install --no-deps` for this package, so uv cannot resolve kirocrew from
+`[tool.uv.sources]` and clobber it). Installing from the git source instead
+yields a working gateway that serves a "frontend not built" page; the Dockerfile
+and the CI smoke test both assert `static/dist/index.html` is present.
 
 **Authentication.** OpenCode reads credentials from
 `~/.local/share/opencode/auth.json` (the container runs as root, so
