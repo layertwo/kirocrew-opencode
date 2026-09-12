@@ -157,6 +157,10 @@ Two real breakages have already happened:
 
 - `_start_process` was called but has never existed in any KiroCrew version —
   the OpenCode spawn path was dead until the provider defined it.
+- `_spawn` called the synchronous `wrap_argv()` while being a coroutine. That
+  helper refuses to run when a loop is running, so **every** spawn raised and
+  only surfaced as a generic "Failed to create background session" line in the
+  gateway log. Awaiting `wrap_argv_async()` is what fixed it.
 - `parse_session_update` gained a `cache_scope` keyword in 0.4.1. The patch
   re-declared upstream's signature, so upstream's own callers hit
   `TypeError` on every `tool_call_update` frame.
@@ -169,6 +173,10 @@ KiroCrew and checks:
 1. every module/class symbol the provider reads or replaces still exists
 2. every callable the provider wraps still accepts the parameters upstream
    declares (signatures captured before `install()`, diffed after)
+3. the opencode spawn still *runs* — `_spawn` is called for real inside an
+   event loop, with the binary lookup and the launch stubbed. Signatures are
+   blind to this class of bug: `wrap_argv` and `wrap_argv_async` take
+   identical arguments, and only the async one may be called from a coroutine.
 
 CI runs pytest on every PR and `uv sync` installs whatever version the PR pins,
 so Renovate bumps are validated automatically. **A red contract test means the

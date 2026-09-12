@@ -57,7 +57,11 @@ def mock_kiro_crew(request):
 
     kiro_crew_acp_client.AcpClient = AcpClient
     kiro_crew_acp_client.AcpError = AcpError
-    kiro_crew_acp_client.wrap_argv = lambda argv, **kw: (argv, None)
+
+    async def wrap_argv_async(argv, **kwargs):
+        return argv, None
+
+    kiro_crew_acp_client.wrap_argv_async = wrap_argv_async
 
     kiro_crew_providers = types.ModuleType("kiro_crew.providers")
     kiro_crew_providers_acp = types.ModuleType("kiro_crew.providers.acp")
