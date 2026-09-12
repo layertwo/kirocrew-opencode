@@ -34,6 +34,7 @@ def install() -> None:
 
     _patch_types()
     _patch_factory()
+    _patch_prerequisite()
 
     from opencode_provider.provider import patch_client, patch_dispatch_raw_params, patch_provider
 
@@ -100,3 +101,45 @@ def _patch_factory() -> None:
 
     KiroCrewConfig.create_provider_factory = create_provider_factory
     logger.info("opencode_provider: provider factory patched ✅")
+
+
+def _patch_prerequisite() -> None:
+    """Answer the kiro-cli readiness gate as satisfied — there is no kiro-cli.
+
+    Upstream derives readiness from the kiro-cli binary, which an opencode image
+    deliberately does not have, so the probe can never pass. On a fresh data home
+    that gates a container working exactly as designed:
+
+    * the dashboard SPA branches on ``ready`` / ``initial_setup_complete`` and
+      renders its "install kiro-cli" first-run gate instead of the app;
+    * ``dashboard.kiro_readiness.reject_if_kiro_unverified`` answers 503 for
+      ``/api/models``, the destructive reruns (regenerate, edit-resend, rewind)
+      and ``POST /v1/chat/completions`` — the OpenAI-compatible endpoint, i.e.
+      the headline use case for this container;
+    * the agent-spec overlay reports a repair gate for specs this home never had.
+
+    Upstream's own ``assume_ready`` is the switch for it: the service reports an
+    established, authenticated install without probing, and every other consumer
+    of the flag short-circuits to a no-op (no identity probe, no session
+    retirement on identity change, no ``kiro-cli update`` run). Forcing it at
+    construction covers every construction site — the two in
+    ``dashboard/server.py`` and the Slack gateway's — because all of them go
+    through this ``__init__``.
+
+    Scoped by ``install()``: this only ever applies when the backend IS opencode,
+    so a kiro-cli gateway keeps its real fail-closed readiness probe.
+    """
+    from kiro_crew.kiro_prerequisite import KiroPrerequisiteService
+
+    _orig_init = KiroPrerequisiteService.__init__
+
+    def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+        # Upstream's __init__ is keyword-only and every call site passes
+        # assume_ready as a keyword (dashboard/server.py:3389, 4506), so this
+        # override is the whole patch. Signature-compatible by **kwargs; the
+        # contract test pins that upstream stays keyword-only.
+        kwargs["assume_ready"] = True
+        _orig_init(self, **kwargs)
+
+    KiroPrerequisiteService.__init__ = __init__
+    logger.info("opencode_provider: kiro-cli readiness gate bypassed ✅")
