@@ -73,7 +73,14 @@ ATTRS: dict[str, list[str]] = {
         "stream_command",
         "_to_llm_event",
     ],
-    "kiro_crew.config.loader:KiroCrewConfig": ["create_provider_factory"],
+    "kiro_crew.config.loader:KiroCrewConfig": ["create_provider_factory", "load"],
+    "kiro_crew.acp_backends": [
+        "ACP_BACKENDS_KNOWN",  # canonical; acp.types re-exports it
+        "selectable_backends",  # read by resolve_selected_backend + the _bg path
+        "register_selectable_backend",  # upstream's edition hook
+        "resolve_selected_backend",
+    ],
+    "kiro_crew.session": ["_bg_runtime_backends"],  # the _bg routing predicate
     "kiro_crew.kiro_prerequisite:KiroPrerequisiteService": [
         "__init__",  # patched to force assume_ready
         "snapshot",  # the payload the SPA gate branches on
@@ -147,6 +154,7 @@ WRAPPED: list[str] = [
     "kiro_crew.providers.acp:AcpProvider._apply_effort_overlay",
     "kiro_crew.providers.acp:AcpProvider._apply_tool_search_overlay",
     "kiro_crew.config.loader:KiroCrewConfig.create_provider_factory",
+    "kiro_crew.config.loader:KiroCrewConfig.load",
     "kiro_crew.kiro_prerequisite:KiroPrerequisiteService.__init__",
 ]
 
@@ -313,6 +321,72 @@ def _prerequisite_gate_problem(problems: list[str]) -> None:
         )
 
 
+def _bg_backend_routing_problem(problems: list[str]) -> None:
+    """The gateway's CONFIG must name our backend, or _bg sessions spawn kiro-cli.
+
+    ``BackgroundSessionRuntime._configured_bg_backend()`` reads
+    ``cfg.agent.acp_backend`` — not the provider our factory patch injects — and
+    hands the session to the multiplexed kiro-cli runtime whenever that value is
+    in ``ACP_BACKENDS_ACP_RUNTIME`` (``{'', 'kas'}``) intersected with the
+    selectable registry. A bare ``''`` is both, so auto-title and link-summary
+    sessions spawned kiro-cli, which this image does not have:
+    ``AcpRuntimeError: kiro-cli not found``, on every session, while interactive
+    sessions worked fine.
+
+    ``KIROCREW_ACP_BACKEND`` cannot fix that alone: upstream never reads it, so
+    it reaches only our own patches. A value in the config is usable only if it
+    also survives ``resolve_selected_backend`` (called inside every
+    ``KiroCrewConfig.load()``, and re-run by bootstrap after policy narrowing) —
+    which is what ``register_selectable_backend`` is for, and why upstream's
+    ``_bg_runtime_backends()`` recomputes its intersection per call.
+
+    So assert all four, through upstream's own code rather than our reading of
+    it: the id is KNOWN in the canonical module and its ``acp.types`` re-export,
+    it is selectable, the loaded config carries it, and the real ``_bg``
+    predicate therefore keeps those sessions on the provider path.
+    """
+    from kiro_crew import acp_backends
+    from kiro_crew.acp import types as t
+    from kiro_crew.config.loader import KiroCrewConfig
+    from kiro_crew.session import _bg_runtime_backends
+
+    # Both, because acp.types re-exports the canonical set: reader modules that
+    # `from kiro_crew.acp_backends import ACP_BACKENDS_KNOWN` (agent_sdk,
+    # providers/mirrors) bind whichever copy is patched.
+    for module, label in ((acp_backends, "acp_backends"), (t, "acp.types")):
+        if "opencode" not in getattr(module, "ACP_BACKENDS_KNOWN", frozenset()):
+            problems.append(
+                f"{label}.ACP_BACKENDS_KNOWN: opencode missing — providers/acp.py "
+                f"rejects an unknown acp_backend at construction, and "
+                f"register_selectable_backend refuses to register an id that is not "
+                f"known, so the config below can never name it"
+            )
+
+    if "opencode" not in acp_backends.selectable_backends():
+        problems.append(
+            "acp_backends.selectable_backends(): opencode missing — "
+            "resolve_selected_backend() coerces agent.acp_backend back to kiro-cli "
+            "inside KiroCrewConfig.load(), so the value cannot survive a config load "
+            "(nor bootstrap's re-run of that gate after policy narrowing)"
+        )
+
+    cfg = KiroCrewConfig.load()
+    if cfg.agent.acp_backend != "opencode":
+        problems.append(
+            f"KiroCrewConfig.load().agent.acp_backend == {cfg.agent.acp_backend!r} — "
+            f"the gateway config does not name this build's backend, so background "
+            f"sessions (auto-title, link-summary) take the multiplexed kiro-cli "
+            f"runtime and fail with 'kiro-cli not found'"
+        )
+    elif cfg.agent.acp_backend in _bg_runtime_backends():
+        problems.append(
+            f"agent.acp_backend {cfg.agent.acp_backend!r} is still in "
+            f"_bg_runtime_backends() ({sorted(_bg_runtime_backends())}) — "
+            f"_bg_backend_supports_runtime() returns True and background sessions "
+            f"bypass our factory for the multiplexed kiro-cli runtime"
+        )
+
+
 def _check() -> list[str]:
     import os
 
@@ -431,6 +505,7 @@ def _check() -> list[str]:
 
     _spawn_wrap_problem(problems)
     _prerequisite_gate_problem(problems)
+    _bg_backend_routing_problem(problems)
 
     return problems
 

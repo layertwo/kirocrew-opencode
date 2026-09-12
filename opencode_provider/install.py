@@ -34,6 +34,7 @@ def install() -> None:
 
     _patch_types()
     _patch_factory()
+    _patch_bg_backend()
     _patch_prerequisite()
 
     from opencode_provider.provider import patch_client, patch_dispatch_raw_params, patch_provider
@@ -51,15 +52,23 @@ def _patch_types() -> None:
 
     Targets 0.3.0+ which has the membership-set architecture.
     """
+    from kiro_crew import acp_backends as canonical
     from kiro_crew.acp import types as t
 
     if not hasattr(t, "ACP_BACKEND_OPENCODE"):
         t.ACP_BACKEND_OPENCODE = ACP_BACKEND_OPENCODE
         logger.info("opencode_provider: added ACP_BACKEND_OPENCODE to acp.types")
 
-    known = getattr(t, "ACP_BACKENDS_KNOWN", None)
+    # acp.types only RE-EXPORTS the set — `acp_backends` is where it is defined —
+    # so rebinding the name in acp.types alone leaves every reader of the
+    # canonical copy seeing a set without us. That includes
+    # register_selectable_backend's own membership check (_patch_bg_backend) and
+    # agent_sdk.backend_install's probe list. Patch the definition, then the
+    # alias, so `from <either> import ACP_BACKENDS_KNOWN` agrees.
+    known = getattr(canonical, "ACP_BACKENDS_KNOWN", None)
     if known is not None and ACP_BACKEND_OPENCODE not in known:
-        t.ACP_BACKENDS_KNOWN = known | {ACP_BACKEND_OPENCODE}
+        canonical.ACP_BACKENDS_KNOWN = known | {ACP_BACKEND_OPENCODE}
+        t.ACP_BACKENDS_KNOWN = canonical.ACP_BACKENDS_KNOWN
         logger.info("opencode_provider: added opencode to ACP_BACKENDS_KNOWN")
 
     # NOT added to ACP_BACKENDS_SESSION_SHARING, ACP_BACKENDS_STEER,
@@ -67,11 +76,13 @@ def _patch_types() -> None:
     # ACP_BACKENDS_KIRO_IDENTITY_STORE —
     # OpenCode is one-process-per-session like claude, not multiplexed.
     #
-    # Staying out of ACP_BACKENDS_ACP_RUNTIME is what routes _bg sessions
-    # (auto-title, link-summary) to SessionManager._provider_backed_bg_session
-    # and thus through our patched factory, instead of to kiro-cli → Anthropic.
-    # The exclusion above IS that patch. Contract test asserts the sets still
-    # exist and still exclude us.
+    # Staying out of ACP_BACKENDS_ACP_RUNTIME is half of what routes _bg
+    # sessions (auto-title, link-summary) to SessionManager._provider_backed_bg_session
+    # and thus through our patched factory, instead of to kiro-cli → Anthropic:
+    # that set is the one _bg_backend_supports_runtime() tests membership in.
+    # The other half is the config value it tests against, which is
+    # _patch_bg_backend's job. Contract test asserts every set still exists and
+    # still excludes us.
 
 
 def _patch_factory() -> None:
@@ -101,6 +112,55 @@ def _patch_factory() -> None:
 
     KiroCrewConfig.create_provider_factory = create_provider_factory
     logger.info("opencode_provider: provider factory patched ✅")
+
+
+def _patch_bg_backend() -> None:
+    """Name our backend in the config, so _bg sessions stop spawning kiro-cli.
+
+    ``BackgroundSessionRuntime._configured_bg_backend()`` reads
+    ``cfg.agent.acp_backend`` — the CONFIG, never the provider our factory patch
+    injects — and hands the session to the multiplexed kiro-cli runtime whenever
+    that value is in ``ACP_BACKENDS_ACP_RUNTIME`` (``{'', 'kas'}``) intersected
+    with the selectable registry. A bare ``''`` is both, so auto-title and
+    link-summary sessions ran kiro-cli, which this image does not have: every one
+    of them died with ``AcpRuntimeError: kiro-cli not found``, while interactive
+    sessions worked. ``KIROCREW_ACP_BACKEND`` cannot reach that decision —
+    upstream never reads the variable, so it only ever reached our own patches.
+
+    Both halves below are upstream's own extension points, not a bypass of them:
+
+    * ``register_selectable_backend`` is documented as how an edition makes its
+      backend nameable in ``agent.acp_backend``. It is also what keeps
+      ``resolve_selected_backend`` from coercing our value back to kiro inside
+      every ``KiroCrewConfig.load()`` — so without it the field would be
+      ignored with a "not selectable in this build" warning on the next load,
+      and bootstrap re-runs that same gate after policy narrowing.
+    * ``KiroCrewConfig.load`` is the one constructor for the config object the
+      gateway, the session manager and the dashboard share, so setting the field
+      there reaches every reader. ``save()`` writes it back if the operator saves
+      settings, which is honest: the file then names the backend actually running.
+
+    Only the agent field. ``member_acp_backend`` stays the operator's choice and
+    is resolved per member session by upstream's own gate.
+    """
+    from kiro_crew.acp.types import ACP_BACKEND_OPENCODE
+    from kiro_crew.acp_backends import register_selectable_backend
+    from kiro_crew.config.loader import KiroCrewConfig
+
+    register_selectable_backend(ACP_BACKEND_OPENCODE)
+
+    _orig_load = KiroCrewConfig.load.__func__  # unbound: upstream's takes `cls`
+
+    def load(cls):  # type: ignore[no-untyped-def]
+        # Set after the real load, not by wrapping _normalize_acp_backend: that
+        # one normalizer is shared with member_acp_backend and takes only a
+        # value, so it cannot tell the two fields apart.
+        cfg = _orig_load(cls)
+        cfg.agent.acp_backend = ACP_BACKEND_OPENCODE
+        return cfg
+
+    KiroCrewConfig.load = classmethod(load)
+    logger.info("opencode_provider: bg session routing patched ✅")
 
 
 def _patch_prerequisite() -> None:

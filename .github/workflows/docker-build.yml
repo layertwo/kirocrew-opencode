@@ -114,5 +114,20 @@ jobs:
               f"kiro-cli readiness gate not bypassed: {snapshot}"
           )
 
+          # Background sessions (auto-title, link-summary) read the CONFIG, not
+          # the provider, and take the multiplexed kiro-cli runtime when
+          # agent.acp_backend is in ACP_BACKENDS_ACP_RUNTIME — so a config that
+          # does not name opencode fails them one per session with
+          # "kiro-cli not found", while interactive sessions work.
+          from kiro_crew.config.loader import KiroCrewConfig
+          from kiro_crew.session import _bg_runtime_backends
+          cfg = KiroCrewConfig.load()
+          assert cfg.agent.acp_backend == "opencode", (
+              f"config does not name the opencode backend: {cfg.agent.acp_backend!r}"
+          )
+          assert "opencode" not in _bg_runtime_backends(), (
+              f"background sessions route to the multiplexed runtime: {_bg_runtime_backends()}"
+          )
+
           print("smoke ok")
           PY
