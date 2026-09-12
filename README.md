@@ -190,7 +190,17 @@ KIROCREW_ACP_BACKEND=opencode uv run gateway
 ```bash
 uv sync --extra dev
 uv run pytest tests/ -v
+uv run black --check .
+uv run isort --check-only .
+uv run flake8 .
+uv run mypy
 ```
+
+Those five are exactly what CI's `lint` job runs. `.` rather than the paths in
+`[tool.black].src` / `[tool.isort].src_paths` on purpose: both list only
+`opencode_provider/` and `tests/`, so a config-scoped run exits 0 while
+`gateway.py` sits unsorted — green because it skipped the file. `flake8`
+defaults to `.`; bare `mypy` reads `[tool.mypy].files`.
 
 ## Upgrading KiroCrew
 
@@ -267,9 +277,10 @@ KiroCrew and checks:
    `_bg_runtime_backends()`, not re-derived here, so a bump that makes the
    runtime accept us turns the test red.
 
-CI runs pytest on every PR and `uv sync` installs whatever version the PR pins,
-so Renovate bumps are validated automatically. **A red contract test means the
-bump will break at runtime — do not merge it.**
+CI runs two jobs on every PR — `test` (pytest) and `lint` (black, isort, flake8,
+mypy) — and `uv sync` installs whatever version the PR pins, so Renovate bumps
+are validated automatically. **A red contract test means the bump will break at
+runtime — do not merge it.**
 
 Instance attributes set in `AcpClient.__init__` (`_extra_env`, `_work_dir`,
 `_tool_call_params`, …) are covered too, by scanning the owner's `__init__`

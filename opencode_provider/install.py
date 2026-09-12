@@ -58,7 +58,7 @@ def _upstream_serves_opencode() -> bool:
         )
         return False
 
-    known = getattr(acp_backends, "ACP_BACKENDS_KNOWN", frozenset())
+    known: frozenset[str] = getattr(acp_backends, "ACP_BACKENDS_KNOWN", frozenset())
     return (
         ACP_BACKEND_OPENCODE in known
         and hasattr(AcpClient, "_is_opencode")
@@ -218,7 +218,11 @@ def _patch_bg_backend() -> None:
         cfg.agent.acp_backend = ACP_BACKEND_OPENCODE
         return cfg
 
-    KiroCrewConfig.load = classmethod(load)
+    # The ignore is a descriptor-vs-callable artifact: mypy types this attribute
+    # as the bound callable call sites see, not as the descriptor being assigned.
+    # It has to stay a classmethod — upstream calls KiroCrewConfig.load() with no
+    # argument, and a plain function would take `cls` as the first positional.
+    KiroCrewConfig.load = classmethod(load)  # type: ignore[assignment]
     logger.info("opencode_provider: bg session routing patched ✅")
 
 
