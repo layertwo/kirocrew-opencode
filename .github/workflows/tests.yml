@@ -26,3 +26,40 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      # Required: uv run alone would find no black/isort/flake8/mypy on a fresh
+      # runner, they live in the dev extra.
+      - name: Install package + deps
+        run: uv sync --extra dev
+
+      # Explicit '.', never a bare invocation and never the configured src dirs.
+      # [tool.black].src and [tool.isort].src_paths list only opencode_provider/
+      # and tests/, so `isort --check-only opencode_provider tests` exits 0 while
+      # gateway.py sits unsorted — green because it skipped the file. '.' covers
+      # all 9 source files, gateway.py included.
+      - name: black
+        run: uv run black --check .
+
+      - name: isort
+        run: uv run isort --check-only .
+
+      # flake8 defaults to '.' and reads [tool.flake8] via Flake8-pyproject,
+      # so this covers the same files as black/isort.
+      - name: flake8
+        run: uv run flake8 .
+
+      # Bare: [tool.mypy].files is the scope (opencode_provider/, tests/,
+      # gateway.py) and passing paths here would override it.
+      - name: mypy
+        run: uv run mypy

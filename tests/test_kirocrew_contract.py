@@ -223,7 +223,10 @@ def _spawn_wrap_problem(problems: list[str]) -> None:
     provider.resolve_opencode_bin = lambda: "/bin/true"  # skip the PATH lookup
 
     try:
-        asyncio.run(AcpClient._spawn(_StubClient()))
+        # _StubClient is duck-typed on purpose (see the docstring): a real
+        # AcpClient constructs with sandbox_mode="auto" and probes the host, and
+        # this is about which helper _spawn awaits, not about client construction.
+        asyncio.run(AcpClient._spawn(_StubClient()))  # type: ignore[arg-type]
     except Exception as exc:  # noqa: BLE001 — the raise is the failure
         problems.append(
             f"AcpClient._spawn: raised {exc!r} on a running event loop — the "
@@ -444,12 +447,13 @@ def _check() -> list[str]:
         try:
             patched_factory = _returned_factory_sig()
         except Exception as exc:  # noqa: BLE001
-            problems.append(f"create_provider_factory(): returned factory broke after install ({exc})")
+            problems.append(
+                f"create_provider_factory(): returned factory broke after install ({exc})"
+            )
         else:
             dropped = set(upstream_factory.parameters) - set(patched_factory.parameters)
             has_kwargs = any(
-                p.kind is inspect.Parameter.VAR_KEYWORD
-                for p in patched_factory.parameters.values()
+                p.kind is inspect.Parameter.VAR_KEYWORD for p in patched_factory.parameters.values()
             )
             if dropped and not has_kwargs:
                 problems.append(

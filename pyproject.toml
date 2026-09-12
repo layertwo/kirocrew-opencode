@@ -115,7 +115,7 @@ check_untyped_defs = true
 show_error_codes = true
 pretty = true
 ignore_missing_imports = true
-files = ["opencode_provider/", "tests/"]
+files = ["opencode_provider/", "tests/", "gateway.py"]
 exclude = [
     "__pycache__",
     ".pytest_cache",
