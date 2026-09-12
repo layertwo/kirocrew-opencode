@@ -100,9 +100,16 @@ def patch_client() -> None:
 
                 raise AcpError("opencode not found in PATH (set OPENCODE_BIN or install opencode)")
             argv = [opencode_bin, OPENCODE_SUBCMD, "--cwd", str(self._work_dir)]
-            from kiro_crew.acp.client import wrap_argv
+            from kiro_crew.acp.client import wrap_argv_async
 
-            argv, self._sandbox_cleanup = wrap_argv(
+            # Async on purpose: sandbox construction probes the host and writes a
+            # launcher/profile, so the sync wrap_argv() REFUSES to run while a
+            # loop is running ("cannot run on an event loop") — and _spawn is a
+            # coroutine, so calling it here failed every spawn on every session,
+            # surfacing only as "Failed to create background session". Same
+            # parameters, same (wrapped, cleanup) return; upstream's own _spawn
+            # awaits this.
+            argv, self._sandbox_cleanup = await wrap_argv_async(
                 argv,
                 mode=self._sandbox_mode,
                 strip_python_env=True,

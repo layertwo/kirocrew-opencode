@@ -27,7 +27,7 @@ ATTRS: dict[str, list[str]] = {
     "kiro_crew.acp.client": [
         "AcpClient",
         "AcpError",
-        "wrap_argv",
+        "wrap_argv_async",  # _spawn; the sync wrap_argv() raises on a live loop
         "METHOD_INITIALIZE",
         "CLIENT_NAME",
         "CLIENT_VERSION",
@@ -63,7 +63,7 @@ ATTRS: dict[str, list[str]] = {
         "stream_events",
         "_drain_stderr",
     ],
-    "kiro_crew.sandbox": ["create_subprocess_limited", "scrub_agent_denied_env", "wrap_argv"],
+    "kiro_crew.sandbox": ["create_subprocess_limited", "scrub_agent_denied_env"],
     "kiro_crew.env": ["augmented_path"],
     "kiro_crew.platform_compat": ["IS_POSIX"],
     "kiro_crew.providers.acp:AcpProvider": [
@@ -183,6 +183,57 @@ def _resolve(path: str):
     return obj
 
 
+def _spawn_wrap_problem(problems: list[str]) -> None:
+    """Our _spawn must AWAIT the sandbox wrap; the tables above cannot see this.
+
+    ``wrap_argv`` and ``wrap_argv_async`` take the same arguments and return the
+    same ``(argv, cleanup)``, so every check in this file passes either way —
+    but the synchronous one raises whenever a loop is running ("performs
+    blocking sandbox preparation and cannot run on an event loop") and ``_spawn``
+    is a coroutine, so calling it failed every opencode spawn, on every session,
+    behind a generic "Failed to create background session" log line.
+
+    So run the real ``_spawn`` inside a real loop against the real upstream
+    helper, stubbing only the binary lookup and the process launch, and require
+    that it reaches the launch. mode="off" keeps the sandbox from probing the
+    host: this is about which helper is awaited, not about sandboxing.
+    """
+    import asyncio
+    import pathlib
+    import tempfile
+
+    from kiro_crew.acp.client import AcpClient
+
+    import opencode_provider.provider as provider
+
+    launched: list[list[str]] = []
+
+    class _StubClient:
+        # Only what our _spawn branch reads before it launches.
+        _is_opencode = True
+        _sandbox_mode = "off"
+        _sandbox_cleanup = None
+        _work_dir = pathlib.Path(tempfile.mkdtemp())
+
+        async def _start_process(self, argv: list[str]) -> None:
+            launched.append(argv)
+
+    provider.resolve_opencode_bin = lambda: "/bin/true"  # skip the PATH lookup
+
+    try:
+        asyncio.run(AcpClient._spawn(_StubClient()))
+    except Exception as exc:  # noqa: BLE001 — the raise is the failure
+        problems.append(
+            f"AcpClient._spawn: raised {exc!r} on a running event loop — the "
+            f"opencode branch must `await wrap_argv_async(...)`; the sync "
+            f"wrap_argv() refuses to run on a loop and _spawn is async"
+        )
+        return
+
+    if not launched or "/bin/true" not in launched[0]:
+        problems.append(f"AcpClient._spawn: finished without launching opencode (argv={launched})")
+
+
 def _check() -> list[str]:
     import os
 
@@ -298,6 +349,8 @@ def _check() -> list[str]:
             )
         elif "opencode" in members:
             problems.append(f"acp.types.{name}: now contains opencode — must not")
+
+    _spawn_wrap_problem(problems)
 
     return problems
 
