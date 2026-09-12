@@ -27,8 +27,10 @@ RUN npm install -g opencode-ai@1.18.21
 # ─────────────────────────────────────────────────────────────
 FROM python:3.14-slim AS kirocrew-stage
 
+# No build-essential: every install here is a wheel or this pure-Python package,
+# so no compiler is reached. CI's image build is the gate if that ever changes.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates build-essential \
+    git curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package installer/resolver).

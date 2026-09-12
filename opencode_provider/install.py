@@ -2,7 +2,7 @@
 
 Entry point called before the gateway boots. Adds the ACP_BACKEND_OPENCODE
 constant to acp.types, patches the provider factory to inject the opencode
-backend, and delegates the ACP provider/client/dispatch patches to
+backend, and delegates the ACP provider/client patches to
 ``provider.py``.
 
 Call ``install()`` BEFORE ``kirocrew gateway`` initialises its provider factory.
@@ -37,11 +37,10 @@ def install() -> None:
     _patch_bg_backend()
     _patch_prerequisite()
 
-    from opencode_provider.provider import patch_client, patch_dispatch_raw_params, patch_provider
+    from opencode_provider.provider import patch_client, patch_provider
 
     patch_client()
     patch_provider()
-    patch_dispatch_raw_params()
 
     _installed = True
     logger.info("opencode_provider installed — OpenCode ACP backend active")

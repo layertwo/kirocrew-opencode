@@ -1,31 +1,31 @@
 """provider.py — OpenCode ACP provider monkey-patches.
 
-Patches AcpClient, AcpProvider, and _dispatch to handle the OpenCode backend.
-Called by ``install.py`` at install time.
+Patches AcpClient and AcpProvider to handle the OpenCode backend. Called by
+``install.py`` at install time.
 
-3 patches:
-  1. AcpClient — _is_opencode, _spawn (opencode acp --cwd), _initialize_session
-     (numeric protocol), _extract_tool_call_refinement (raw_params fix),
-     supports_steer, send_command, stream_command, _reject_unknown_server_request
+2 patches:
+  1. AcpClient — _is_opencode, _start_process (launch helper — upstream has
+     none), _spawn (opencode acp --cwd), _initialize_session (numeric protocol),
+     _extract_tool_call_refinement (raw_params fix), supports_steer,
+     send_command, stream_command, _reject_unknown_server_request
   2. AcpProvider — is_opencode_backend, route through AcpClient, skip overlays,
      stream_command routing
-  3. _dispatch — _build_tool_refinement_event raw_params_cache refresh
-     (root-cause fix for deny-by-default; benefits ALL backends)
+
+The old `acp._dispatch` raw_params_cache patch is gone: upstream has refreshed
+that cache on a tool_call_update since 0.4.1, so its capability probe returned
+True on every version this repo pins and the patch body could not run. The
+remaining raw_params fix is patch 1's `_extract_tool_call_refinement` above,
+which fills the same gap one level down in AcpClient._tool_call_params.
 """
 
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import os
 from typing import Any
 
-from opencode_provider._config import (
-    OPENCODE_SUBCMD,
-    PROTOCOL_VERSION_OPENCODE,
-    resolve_opencode_bin,
-)
+from opencode_provider._config import resolve_opencode_bin
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def patch_client() -> None:
                 from kiro_crew.acp.client import AcpError
 
                 raise AcpError("opencode not found in PATH (set OPENCODE_BIN or install opencode)")
-            argv = [opencode_bin, OPENCODE_SUBCMD, "--cwd", str(self._work_dir)]
+            argv = [opencode_bin, "acp", "--cwd", str(self._work_dir)]
             from kiro_crew.acp.client import wrap_argv_async
 
             # Async on purpose: sandbox construction probes the host and writes a
@@ -139,7 +139,8 @@ def patch_client() -> None:
         init_id = await self._send_request(
             METHOD_INITIALIZE,
             {
-                "protocolVersion": PROTOCOL_VERSION_OPENCODE,
+                # opencode speaks ACP protocol version 1, and it is a number.
+                "protocolVersion": 1,
                 "clientInfo": {"name": CLIENT_NAME, "version": CLIENT_VERSION},
                 "clientCapabilities": ACP_CLIENT_CAPABILITIES,
             },
@@ -340,90 +341,3 @@ def patch_provider() -> None:
     AcpProvider.stream_command = stream_command
 
     logger.info("opencode_provider: AcpProvider patched ✅")
-
-
-def _refreshes_raw_params(parse_session_update) -> bool:  # type: ignore[no-untyped-def]
-    """Does upstream already refresh raw_params_cache on a tool_call_update?
-
-    Probed rather than version-checked, so the patch retires itself whenever
-    upstream fixes this — no version table to keep current.
-    """
-    probe: dict[str, Any] = {}
-    kwargs: dict[str, Any] = {
-        "tool_input_cache": {},
-        "shell_cache": {},
-        "raw_params_cache": probe,
-        "mcp_server_name_cache": {},
-        "tool_name_cache": {},
-    }
-    params = inspect.signature(parse_session_update).parameters
-    if "cache_scope" in params:
-        kwargs["cache_scope"] = "opencode-provider-probe"
-    try:
-        parse_session_update(
-            {
-                "sessionUpdate": "tool_call_update",
-                "toolCallId": "opencode-provider-probe",
-                "rawInput": {"probe": True},
-            },
-            **kwargs,
-        )
-    except Exception:
-        logger.warning("opencode_provider: raw_params probe failed — applying patch", exc_info=True)
-        return False
-    return bool(probe)
-
-
-def patch_dispatch_raw_params() -> None:
-    """Fix raw_params_cache refresh in _build_tool_refinement_event.
-
-    Root-cause fix for deny-by-default: when an agent streams a tool call in
-    two frames, the refinement handler refreshes shell_cache and
-    tool_input_cache but never raw_params_cache. Benefits ALL backends.
-
-    0.3.0's parse_session_update calls _build_tool_refinement_event WITHOUT
-    passing raw_params_cache, so we patch parse_session_update itself to
-    manually refresh the cache after calling the original.
-
-    Retires itself where upstream has fixed this (0.4.1 refreshes the cache
-    under a session-scoped key): applying the patch there would write a second,
-    unscoped key that nothing reads.
-    """
-    try:
-        from kiro_crew.acp import _dispatch
-    except ImportError:
-        logger.warning("opencode_provider: _dispatch.py not found — skipping raw_params fix")
-        return
-
-    _orig_parse = _dispatch.parse_session_update
-
-    if _refreshes_raw_params(_orig_parse):
-        logger.info(
-            "opencode_provider: upstream already refreshes raw_params_cache — "
-            "skipping raw_params fix"
-        )
-        return
-
-    # **kwargs rather than re-declaring upstream's keyword-only parameters:
-    # this wrapper IS parse_session_update once installed, so upstream's own
-    # callers hit it. Spelling the list out turns an additive upstream change
-    # into a TypeError at every call site — 0.4.1 added cache_scope, and
-    # session_handle.py passes it on the tool_call_update path.
-    def parse_session_update(update, *, raw_params_cache=None, **kwargs):  # type: ignore[no-untyped-def]
-        events = _orig_parse(update, raw_params_cache=raw_params_cache, **kwargs)
-        # The original parse_session_update does NOT pass raw_params_cache to
-        # _build_tool_refinement_event, so manually refresh from the update dict.
-        if (
-            raw_params_cache is not None
-            and isinstance(update, dict)
-            and update.get("sessionUpdate") == "tool_call_update"
-        ):
-            tool_use_id = update.get("toolCallId", "")
-            raw_input = update.get("rawInput")
-            if tool_use_id and isinstance(raw_input, dict) and raw_input:
-                raw_params_cache[tool_use_id] = raw_input
-        return events
-
-    _dispatch.parse_session_update = parse_session_update
-
-    logger.info("opencode_provider: _dispatch raw_params fix patched ✅")

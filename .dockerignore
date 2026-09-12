@@ -4,3 +4,23 @@ README.md
 Dockerfile
 .dockerignore
 renovate.json
+
+# Local envs and generated artifacts. `COPY . /opt/opencode_provider/` would
+# otherwise pull a local .venv, coverage output and build/ into the build
+# context and the image layer.
+.venv/
+venv/
+build/
+dist/
+htmlcov/
+.coverage
+coverage.xml
+.pytest_cache/
+.mypy_cache/
+__pycache__/
+*.pyc
+*.egg-info/
+.claude/
+
+# Not needed at runtime: setuptools packages only opencode_provider + gateway.
+tests/

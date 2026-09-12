@@ -88,7 +88,6 @@ ATTRS: dict[str, list[str]] = {
         "verified_ready",  # gates the reruns and POST /v1/chat/completions
         "initial_setup_complete",
     ],
-    "kiro_crew.acp._dispatch": ["parse_session_update"],
 }
 
 # Instance attributes our patches read or write, checked by scanning the
@@ -116,18 +115,6 @@ INIT_ATTRS: dict[str, list[str]] = {
     ],
 }
 
-# Keywords provider._refreshes_raw_params passes to parse_session_update.
-# WRAPPED catches params our patch drops; this catches ones upstream dropped
-# from under us — the probe would raise, get swallowed by its own except, and
-# re-apply a patch that had already retired itself.
-PROBE_KWARGS = (
-    "tool_input_cache",
-    "shell_cache",
-    "raw_params_cache",
-    "mcp_server_name_cache",
-    "tool_name_cache",
-)
-
 # Membership sets install.py deliberately leaves opencode out of. Each must
 # still exist (a rename means our exclusion stopped meaning anything) and must
 # still exclude opencode after install().
@@ -143,7 +130,6 @@ EXCLUDED: list[str] = [
 # Our replacement must keep accepting every parameter upstream declares,
 # otherwise upstream call sites blow up with TypeError at runtime.
 WRAPPED: list[str] = [
-    "kiro_crew.acp._dispatch:parse_session_update",
     "kiro_crew.acp.client:AcpClient._spawn",
     "kiro_crew.acp.client:AcpClient.send_command",
     "kiro_crew.acp.client:AcpClient.stream_command",
@@ -431,14 +417,6 @@ def _check() -> list[str]:
     except Exception as exc:  # noqa: BLE001 — any failure here is itself a contract break
         problems.append(f"create_provider_factory(): cannot introspect returned factory ({exc})")
         upstream_factory = None
-
-    probe = before.get("kiro_crew.acp._dispatch:parse_session_update")
-    if probe:
-        for name in PROBE_KWARGS:
-            if name not in probe.parameters:
-                problems.append(
-                    f"parse_session_update: dropped keyword '{name}' our probe passes"
-                )
 
     from opencode_provider import install
 
