@@ -46,7 +46,7 @@ kirocrew-opencode/
 ├── opencode_provider/
 │   ├── __init__.py               # Public API: install(), is_installed()
 │   ├── _config.py                # Env vars, ACP_BACKEND_OPENCODE constant
-│   ├── install.py                # Patches 1, 4, 5 (types, factory, bg sessions)
+│   ├── install.py                # Patches 1, 4, 5, 7 (types, factory, bg sessions, kiro-cli gate)
 │   └── provider.py               # Patches 2, 3, 6 (client, provider, dispatch)
 └── tests/
     ├── test_config.py            # Env-var handling
@@ -55,7 +55,7 @@ kirocrew-opencode/
     └── test_kirocrew_contract.py # Patch targets vs the REAL installed kirocrew
 ```
 
-## What gets patched (6 patches)
+## What gets patched (7 patches)
 
 | # | Target | What |
 |---|--------|------|
@@ -63,8 +63,9 @@ kirocrew-opencode/
 | 2 | `acp.client.AcpClient` | `_is_opencode`, `_start_process` (launch helper — upstream has none), `_spawn` (`opencode acp --cwd`), `_initialize_session` (numeric protocol), `_extract_tool_call_refinement` (raw_params fix), `supports_steer`, `send_command`, `stream_command`, `_reject_unknown_server_request` |
 | 3 | `providers.acp.AcpProvider` | `is_opencode_backend`, route through AcpClient (not AcpRuntime), skip kiro-cli overlays |
 | 4 | `config.loader` | Factory injects `acp_backend=opencode` into the provider |
-| 5 | `session.SessionManager` | `_bg_provider_is_kiro → False` (bg sessions route through factory, not kiro-cli) |
+| 5 | `acp_backends` + `config.loader.KiroCrewConfig` | Register `opencode` as selectable, and name it in `agent.acp_backend` on every config load — bg sessions read the *config*, not the provider, and `''` means kiro-cli |
 | 6 | `acp._dispatch` | `raw_params_cache` refresh — **self-retiring**, see below. Skipped on 0.4.1 |
+| 7 | `kiro_prerequisite.KiroPrerequisiteService` | Force `assume_ready=True` at construction — the kiro-cli readiness gate has nothing to probe here |
 
 `install()` logs which patches applied:
 
@@ -73,10 +74,55 @@ opencode_provider: added ACP_BACKEND_OPENCODE to acp.types
 opencode_provider: added opencode to ACP_BACKENDS_KNOWN
 opencode_provider: provider factory patched ✅
 opencode_provider: bg session routing patched ✅
+opencode_provider: kiro-cli readiness gate bypassed ✅
 opencode_provider: AcpClient patched ✅
 opencode_provider: AcpProvider patched ✅
 opencode_provider: upstream already refreshes raw_params_cache — skipping raw_params fix
 ```
+
+## Background sessions (patch 5)
+
+Auto-title and link-summary run as background sessions, and those pick their
+harness from `cfg.agent.acp_backend` — **the config, never the provider** our
+factory patch injects. A value of `''` is in `ACP_BACKENDS_ACP_RUNTIME` (with
+`kas`), so those sessions went to the multiplexed kiro-cli runtime and died with
+`AcpRuntimeError: kiro-cli not found`, one per session, while interactive
+sessions worked. `KIROCREW_ACP_BACKEND` cannot reach that decision: upstream
+never reads the variable, so it only ever reached our own patches.
+
+Patch 5 therefore does two things, both upstream's own extension points:
+`register_selectable_backend("opencode")` makes the id nameable in
+`agent.acp_backend` (and stops `resolve_selected_backend` coercing it back to
+kiro inside every `KiroCrewConfig.load()`), and wrapping `KiroCrewConfig.load`
+sets the field, which is the single constructor for the config object the
+gateway, the session manager and the dashboard all share. Staying out of
+`ACP_BACKENDS_ACP_RUNTIME` is the other half — that set is what
+`_bg_backend_supports_runtime()` tests membership in.
+
+## The kiro-cli readiness gate (patch 7)
+
+Upstream derives readiness from the kiro-cli binary, and this image deliberately
+has none — opencode *is* the backend. The probe can therefore never pass, and on
+a fresh data home that gates a container working exactly as designed:
+
+- the dashboard SPA branches on `ready` / `initial_setup_complete` and renders
+  its "install kiro-cli" first-run gate instead of the app;
+- `dashboard.kiro_readiness.reject_if_kiro_unverified` answers **503** for
+  `/api/models`, the destructive reruns (regenerate, edit-resend, rewind) and
+  `POST /v1/chat/completions` — the OpenAI-compatible endpoint, so an API client
+  sees nothing but `kiro_prerequisite_required`;
+- the agent-spec overlay reports a repair gate for specs this home never had.
+
+There is no client-side skip: a payload that says "not ready" wins over the
+`kirocrew:kiro-setup-complete` localStorage marker. The supported switch is
+upstream's own `assume_ready`, which this patch forces at construction. The
+service then reports an established, authenticated install without probing, and
+every other consumer of the flag is a no-op (identity probe, session retirement,
+`kiro-cli update`). Scoped by `install()`, so a kiro-cli gateway keeps the real
+fail-closed probe.
+
+`--test-mode` would reach the same state but is not usable: it also forces
+`--approval reads`, which would block the agent's writes.
 
 ## Quick start
 
@@ -153,7 +199,7 @@ attribute before replacing it, so an upstream rename raises `AttributeError`.
 import main` — so that exception takes the whole gateway down. There is no
 fallback to kiro-cli.
 
-Two real breakages have already happened:
+Real breakages have already happened:
 
 - `_start_process` was called but has never existed in any KiroCrew version —
   the OpenCode spawn path was dead until the provider defined it.
@@ -164,6 +210,10 @@ Two real breakages have already happened:
 - `parse_session_update` gained a `cache_scope` keyword in 0.4.1. The patch
   re-declared upstream's signature, so upstream's own callers hit
   `TypeError` on every `tool_call_update` frame.
+- background sessions picked kiro-cli, not opencode, and failed one per session
+  with `kiro-cli not found` — see [patch 5](#background-sessions-patch-5). They
+  read `agent.acp_backend` from the config, and upstream never reads
+  `KIROCREW_ACP_BACKEND`, so our provider patch was never in that decision.
 
 `tests/test_kirocrew_contract.py` exists to catch exactly this. Unlike the
 other test modules — which fabricate `kiro_crew` via `sys.modules` and
@@ -177,6 +227,15 @@ KiroCrew and checks:
    event loop, with the binary lookup and the launch stubbed. Signatures are
    blind to this class of bug: `wrap_argv` and `wrap_argv_async` take
    identical arguments, and only the async one may be called from a coroutine.
+4. the prerequisite service still reports a *usable* install against an empty
+   data home — both the payload the SPA branches on and the predicates behind
+   the 503s. A kiro-cli-shaped gate is the one thing this image can never
+   satisfy by probing, so it has to be answered some other way, and this asserts
+   the answer.
+5. the loaded config still names our backend and the `_bg` predicate still keeps
+   background sessions off the multiplexed runtime — read through upstream's own
+   `_bg_runtime_backends()`, not re-derived here, so a bump that makes the
+   runtime accept us turns the test red.
 
 CI runs pytest on every PR and `uv sync` installs whatever version the PR pins,
 so Renovate bumps are validated automatically. **A red contract test means the
@@ -213,7 +272,8 @@ itself whenever upstream fixes this — including on backports.
   servers, and skills all work as designed. lenovo1996 reimplements 13 tool
   handlers in Python; we don't.
 - **No `whoami`/`--version` probe** — KiroCrew only probes kiro-cli for
-  readiness, not the ACP backend process.
+  readiness, not the ACP backend process. Patch 7 answers that readiness gate as
+  satisfied instead (see [above](#the-kiro-cli-readiness-gate-patch-7)).
 - **No model catalog probe** — OpenCode advertises models via
   `session/new` `configOptions`, which KiroCrew reads natively.
 - **No session sharing** — OpenCode is one process per session (like

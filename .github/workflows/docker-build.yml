@@ -104,5 +104,30 @@ jobs:
           ui = Path(kiro_crew.__file__).parent / "static" / "dist" / "index.html"
           assert ui.is_file(), f"dashboard UI missing from image: {ui}"
 
+          # No kiro-cli exists in this image, so the readiness gate it drives can
+          # never pass by probing: unpatched, the dashboard serves its install
+          # gate and /v1/chat/completions 503s with kiro_prerequisite_required.
+          # Assert the patch (install.py) really took effect in the image.
+          from kiro_crew.kiro_prerequisite import KiroPrerequisiteService
+          snapshot = KiroPrerequisiteService(environ={})._snapshot_dict()
+          assert snapshot["ready"] and snapshot["initial_setup_complete"], (
+              f"kiro-cli readiness gate not bypassed: {snapshot}"
+          )
+
+          # Background sessions (auto-title, link-summary) read the CONFIG, not
+          # the provider, and take the multiplexed kiro-cli runtime when
+          # agent.acp_backend is in ACP_BACKENDS_ACP_RUNTIME — so a config that
+          # does not name opencode fails them one per session with
+          # "kiro-cli not found", while interactive sessions work.
+          from kiro_crew.config.loader import KiroCrewConfig
+          from kiro_crew.session import _bg_runtime_backends
+          cfg = KiroCrewConfig.load()
+          assert cfg.agent.acp_backend == "opencode", (
+              f"config does not name the opencode backend: {cfg.agent.acp_backend!r}"
+          )
+          assert "opencode" not in _bg_runtime_backends(), (
+              f"background sessions route to the multiplexed runtime: {_bg_runtime_backends()}"
+          )
+
           print("smoke ok")
           PY

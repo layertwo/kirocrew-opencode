@@ -42,6 +42,22 @@ def mock_kiro_crew(request):
 
     kiro_crew_acp_client = types.ModuleType("kiro_crew.acp.client")
 
+    # Canonical home of ACP_BACKENDS_KNOWN; acp.types re-exports it. The real
+    # register_selectable_backend rejects an id outside that set, which is why
+    # _patch_types() has to patch the canonical copy before _patch_bg_backend()
+    # registers — so the mock rejects it too, rather than accepting anything.
+    kiro_crew_acp_backends = types.ModuleType("kiro_crew.acp_backends")
+    kiro_crew_acp_backends.ACP_BACKENDS_KNOWN = kiro_crew_acp_types.ACP_BACKENDS_KNOWN
+
+    def register_selectable_backend(backend):
+        if backend not in kiro_crew_acp_backends.ACP_BACKENDS_KNOWN:
+            raise ValueError(
+                f"cannot register unknown ACP backend {backend!r}; "
+                f"known: {sorted(kiro_crew_acp_backends.ACP_BACKENDS_KNOWN)}"
+            )
+
+    kiro_crew_acp_backends.register_selectable_backend = register_selectable_backend
+
     class AcpError(Exception):
         pass
 
@@ -80,10 +96,30 @@ def mock_kiro_crew(request):
     kiro_crew_acp_dispatch._build_tool_refinement_event = lambda *a, **kw: None
     kiro_crew_acp_dispatch.parse_session_update = lambda *a, **kw: []
 
+    kiro_crew_prerequisite = types.ModuleType("kiro_crew.kiro_prerequisite")
+
+    class KiroPrerequisiteService:
+        # Keyword-only, like upstream's — install.py's patch relies on that and
+        # the contract test pins it against the real class.
+        def __init__(self, *, assume_ready: bool = False, **kwargs):
+            self.assume_ready = assume_ready
+
+    kiro_crew_prerequisite.KiroPrerequisiteService = KiroPrerequisiteService
+
     kiro_crew_config = types.ModuleType("kiro_crew.config")
     kiro_crew_config_loader = types.ModuleType("kiro_crew.config.loader")
 
     class MockKiroCrewConfig:
+        def __init__(self):
+            # `_patch_bg_backend` sets cfg.agent.acp_backend on the loaded
+            # object; `""` is the kiro spelling upstream normalizes an absent
+            # value to.
+            self.agent = types.SimpleNamespace(acp_backend="")
+
+        @classmethod
+        def load(cls):
+            return cls()
+
         def create_provider_factory(self):
             # Mirrors upstream's `_acp(session_key=None, agent=None, ...)`. A
             # `**kwargs`-only mock here is what let a keyword-only wrapper ship:
@@ -97,7 +133,9 @@ def mock_kiro_crew(request):
 
     # Wire the tree
     kiro_crew.acp = kiro_crew_acp
+    kiro_crew.acp_backends = kiro_crew_acp_backends
     kiro_crew.config = kiro_crew_config
+    kiro_crew.kiro_prerequisite = kiro_crew_prerequisite
     kiro_crew_acp.types = kiro_crew_acp_types
     kiro_crew_acp.client = kiro_crew_acp_client
     kiro_crew_acp._dispatch = kiro_crew_acp_dispatch
@@ -110,8 +148,10 @@ def mock_kiro_crew(request):
         "kiro_crew.acp.types",
         "kiro_crew.acp.client",
         "kiro_crew.acp._dispatch",
+        "kiro_crew.acp_backends",
         "kiro_crew.config",
         "kiro_crew.config.loader",
+        "kiro_crew.kiro_prerequisite",
         "kiro_crew.providers",
         "kiro_crew.providers.acp",
     ]
@@ -121,7 +161,9 @@ def mock_kiro_crew(request):
     sys.modules["kiro_crew.acp.types"] = kiro_crew_acp_types
     sys.modules["kiro_crew.acp.client"] = kiro_crew_acp_client
     sys.modules["kiro_crew.acp._dispatch"] = kiro_crew_acp_dispatch
+    sys.modules["kiro_crew.acp_backends"] = kiro_crew_acp_backends
     sys.modules["kiro_crew.config"] = kiro_crew_config
+    sys.modules["kiro_crew.kiro_prerequisite"] = kiro_crew_prerequisite
     sys.modules["kiro_crew.config.loader"] = kiro_crew_config_loader
     sys.modules["kiro_crew.providers"] = kiro_crew_providers
     sys.modules["kiro_crew.providers.acp"] = kiro_crew_providers_acp
@@ -157,6 +199,25 @@ def test_install_is_idempotent(mock_kiro_crew, monkeypatch):
     install()
     install()
     assert is_installed() is True
+
+
+def test_install_names_the_backend_in_the_loaded_config(mock_kiro_crew, monkeypatch):
+    """_bg sessions read cfg.agent.acp_backend, so it has to carry our backend.
+
+    The mock's register_selectable_backend rejects an id outside
+    ACP_BACKENDS_KNOWN exactly as upstream does, so this also pins the ordering:
+    _patch_types() must run first, or registration raises.
+    """
+    monkeypatch.setenv("KIROCREW_ACP_BACKEND", "opencode")
+    install()
+
+    loader_mod = sys.modules["kiro_crew.config.loader"]
+    assert loader_mod.KiroCrewConfig.load().agent.acp_backend == "opencode"
+
+    # Canonical set, not just the acp.types re-export.
+    backends_mod = sys.modules["kiro_crew.acp_backends"]
+    assert "opencode" in backends_mod.ACP_BACKENDS_KNOWN
+    assert "opencode" in sys.modules["kiro_crew.acp.types"].ACP_BACKENDS_KNOWN
 
 
 def test_install_patches_factory(mock_kiro_crew, monkeypatch):
