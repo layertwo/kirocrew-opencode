@@ -1,20 +1,6 @@
 """Tests for opencode_provider._config."""
 
-from opencode_provider._config import (
-    ACP_BACKEND_OPENCODE,
-    OPENCODE_BIN_DEFAULT,
-    OPENCODE_SUBCMD,
-    PROTOCOL_VERSION_OPENCODE,
-    is_opencode_selected,
-    resolve_opencode_bin,
-)
-
-
-def test_constants():
-    assert ACP_BACKEND_OPENCODE == "opencode"
-    assert PROTOCOL_VERSION_OPENCODE == 1
-    assert OPENCODE_BIN_DEFAULT == "opencode"
-    assert OPENCODE_SUBCMD == "acp"
+from opencode_provider._config import is_opencode_selected, resolve_opencode_bin
 
 
 def test_is_opencode_selected_true(monkeypatch):

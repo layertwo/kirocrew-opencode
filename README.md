@@ -46,16 +46,15 @@ kirocrew-opencode/
 ├── opencode_provider/
 │   ├── __init__.py               # Public API: install(), is_installed()
 │   ├── _config.py                # Env vars, ACP_BACKEND_OPENCODE constant
-│   ├── install.py                # Patches 1, 4, 5, 7 (types, factory, bg sessions, kiro-cli gate)
-│   └── provider.py               # Patches 2, 3, 6 (client, provider, dispatch)
+│   ├── install.py                # Patches 1, 4, 5, 6 (types, factory, bg sessions, kiro-cli gate)
+│   └── provider.py               # Patches 2, 3 (client, provider)
 └── tests/
     ├── test_config.py            # Env-var handling
-    ├── test_dispatch.py          # raw_params refresh logic (mocked kiro_crew)
     ├── test_install.py           # install() wiring (mocked kiro_crew)
     └── test_kirocrew_contract.py # Patch targets vs the REAL installed kirocrew
 ```
 
-## What gets patched (7 patches)
+## What gets patched (6 patches)
 
 | # | Target | What |
 |---|--------|------|
@@ -64,8 +63,7 @@ kirocrew-opencode/
 | 3 | `providers.acp.AcpProvider` | `is_opencode_backend`, route through AcpClient (not AcpRuntime), skip kiro-cli overlays |
 | 4 | `config.loader` | Factory injects `acp_backend=opencode` into the provider |
 | 5 | `acp_backends` + `config.loader.KiroCrewConfig` | Register `opencode` as selectable, and name it in `agent.acp_backend` on every config load — bg sessions read the *config*, not the provider, and `''` means kiro-cli |
-| 6 | `acp._dispatch` | `raw_params_cache` refresh — **self-retiring**, see below. Skipped on 0.4.1 |
-| 7 | `kiro_prerequisite.KiroPrerequisiteService` | Force `assume_ready=True` at construction — the kiro-cli readiness gate has nothing to probe here |
+| 6 | `kiro_prerequisite.KiroPrerequisiteService` | Force `assume_ready=True` at construction — the kiro-cli readiness gate has nothing to probe here |
 
 `install()` logs which patches applied:
 
@@ -77,7 +75,6 @@ opencode_provider: bg session routing patched ✅
 opencode_provider: kiro-cli readiness gate bypassed ✅
 opencode_provider: AcpClient patched ✅
 opencode_provider: AcpProvider patched ✅
-opencode_provider: upstream already refreshes raw_params_cache — skipping raw_params fix
 ```
 
 ## Background sessions (patch 5)
@@ -99,7 +96,7 @@ gateway, the session manager and the dashboard all share. Staying out of
 `ACP_BACKENDS_ACP_RUNTIME` is the other half — that set is what
 `_bg_backend_supports_runtime()` tests membership in.
 
-## The kiro-cli readiness gate (patch 7)
+## The kiro-cli readiness gate (patch 6)
 
 Upstream derives readiness from the kiro-cli binary, and this image deliberately
 has none — opencode *is* the backend. The probe can therefore never pass, and on
@@ -209,7 +206,9 @@ Real breakages have already happened:
   gateway log. Awaiting `wrap_argv_async()` is what fixed it.
 - `parse_session_update` gained a `cache_scope` keyword in 0.4.1. The patch
   re-declared upstream's signature, so upstream's own callers hit
-  `TypeError` on every `tool_call_update` frame.
+  `TypeError` on every `tool_call_update` frame. *(That patch has since been
+  deleted — upstream refreshes the cache itself — but the class of break is
+  what the contract test's `WRAPPED` table still guards.)*
 - background sessions picked kiro-cli, not opencode, and failed one per session
   with `kiro-cli not found` — see [patch 5](#background-sessions-patch-5). They
   read `agent.acp_backend` from the config, and upstream never reads
@@ -241,30 +240,10 @@ CI runs pytest on every PR and `uv sync` installs whatever version the PR pins,
 so Renovate bumps are validated automatically. **A red contract test means the
 bump will break at runtime — do not merge it.**
 
-Not covered: instance attributes set in `AcpClient.__init__` (`_extra_env`,
-`_work_dir`, `_tool_call_params`, …), which would need a constructed client.
-
-## The raw_params_cache bug fix
-
-Patch 6 was a pure bugfix that benefited ALL backends. When an agent streams a
-tool call in two frames (initial `tool_call` with empty `rawInput`, then
-`tool_call_update` with the populated dict), KiroCrew 0.3.0's refinement
-handler refreshed `shell_cache` and `tool_input_cache` but never
-`raw_params_cache` — so the permission gate couldn't recover the command and
-deny-by-default fired for shell tools.
-
-**KiroCrew 0.4.1 fixes this upstream**, storing the entry under a
-session-scoped key. Applying the patch there would write a second, unscoped
-key that nothing reads, so `patch_dispatch_raw_params` probes upstream's
-behaviour and skips itself when the refresh already happens:
-
-| KiroCrew | upstream alone | patch |
-|---|---|---|
-| 0.3.0 | `{}` | applies → `{'t1': {...}}` |
-| 0.4.1 | `{'sess-abc\|t1': {...}}` | skipped |
-
-The probe is a capability check, not a version check, so the patch retires
-itself whenever upstream fixes this — including on backports.
+Instance attributes set in `AcpClient.__init__` (`_extra_env`, `_work_dir`,
+`_tool_call_params`, …) are covered too, by scanning the owner's `__init__`
+source for `self.<name> =` — so a rename still surfaces without constructing a
+client.
 
 ## What's NOT here (deliberately)
 

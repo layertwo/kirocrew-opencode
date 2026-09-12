@@ -15,14 +15,6 @@ for all event parsing, tool-call extraction, and permission flows.
 import sys
 import os
 
-# ── Encoding fix (same as lenovo1996's gateway.py) ───────────────────────────
-os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-os.environ.setdefault("PYTHONUTF8", "1")
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
 # Ensure opencode_provider is importable
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 if _REPO_ROOT not in sys.path:

@@ -1,8 +1,8 @@
 """Tests for opencode_provider.install orchestration logic.
 
 Tests the install() entry point, _patch_types and _patch_factory using mock
-modules. The provider.py patches (AcpClient, AcpProvider, _dispatch) require a
-real kiro_crew install and are tested separately in test_dispatch.py.
+modules. The provider.py patches (AcpClient, AcpProvider) require a real
+kiro_crew install and are covered by test_kirocrew_contract.py.
 
 Because the mocks are fabricated here, nothing in this file can fail on an
 upstream change — that is test_kirocrew_contract.py's job.
@@ -92,10 +92,6 @@ def mock_kiro_crew(request):
 
     kiro_crew_providers_acp.AcpProvider = AcpProvider
 
-    kiro_crew_acp_dispatch = types.ModuleType("kiro_crew.acp._dispatch")
-    kiro_crew_acp_dispatch._build_tool_refinement_event = lambda *a, **kw: None
-    kiro_crew_acp_dispatch.parse_session_update = lambda *a, **kw: []
-
     kiro_crew_prerequisite = types.ModuleType("kiro_crew.kiro_prerequisite")
 
     class KiroPrerequisiteService:
@@ -138,7 +134,6 @@ def mock_kiro_crew(request):
     kiro_crew.kiro_prerequisite = kiro_crew_prerequisite
     kiro_crew_acp.types = kiro_crew_acp_types
     kiro_crew_acp.client = kiro_crew_acp_client
-    kiro_crew_acp._dispatch = kiro_crew_acp_dispatch
     kiro_crew_providers.acp = kiro_crew_providers_acp
 
     # Save and install all
@@ -147,7 +142,6 @@ def mock_kiro_crew(request):
         "kiro_crew.acp",
         "kiro_crew.acp.types",
         "kiro_crew.acp.client",
-        "kiro_crew.acp._dispatch",
         "kiro_crew.acp_backends",
         "kiro_crew.config",
         "kiro_crew.config.loader",
@@ -160,7 +154,6 @@ def mock_kiro_crew(request):
     sys.modules["kiro_crew.acp"] = kiro_crew_acp
     sys.modules["kiro_crew.acp.types"] = kiro_crew_acp_types
     sys.modules["kiro_crew.acp.client"] = kiro_crew_acp_client
-    sys.modules["kiro_crew.acp._dispatch"] = kiro_crew_acp_dispatch
     sys.modules["kiro_crew.acp_backends"] = kiro_crew_acp_backends
     sys.modules["kiro_crew.config"] = kiro_crew_config
     sys.modules["kiro_crew.kiro_prerequisite"] = kiro_crew_prerequisite

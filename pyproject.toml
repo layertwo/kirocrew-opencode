@@ -43,9 +43,6 @@ addopts = [
     "--verbose",
     "--cov=opencode_provider",
     "--cov-report=term-missing",
-    "--cov-report=term",
-    "--cov-report=html",
-    "--cov-report=xml",
     "-n=auto"
 ]
 
@@ -57,8 +54,6 @@ omit = [
     "*/generated/*",
 ]
 branch = true
-parallel = true
-relative_files = true
 
 [tool.coverage.report]
 exclude_lines = [
