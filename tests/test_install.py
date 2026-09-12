@@ -226,3 +226,85 @@ def test_install_patches_factory(mock_kiro_crew, monkeypatch):
     # eval/judge.py:58, auto_improvement agent_runner.py:1341).
     assert factory("bg-session-key", agent="kiro") is not None
     assert factory("", agent=None, cwd=None) is not None
+
+
+def test_upstream_serves_opencode_is_false_without_native_support(mock_kiro_crew):
+    """The guard must NOT retire our patches on a build lacking the backend.
+
+    A spurious True here is the dangerous direction: it skips the client and
+    provider patches, so nothing can spawn opencode at all — while every log
+    line still reports a successful install.
+    """
+    from opencode_provider.install import _upstream_serves_opencode
+
+    assert _upstream_serves_opencode() is False
+
+
+def test_upstream_serves_opencode_needs_all_three_facts(mock_kiro_crew):
+    """Registry membership alone is not enough: a build can name the id without
+    the client and provider support behind it."""
+    from opencode_provider.install import _upstream_serves_opencode
+
+    sys.modules["kiro_crew.acp_backends"].ACP_BACKENDS_KNOWN = frozenset({"", "opencode"})
+    assert _upstream_serves_opencode() is False
+
+    sys.modules["kiro_crew.acp.client"].AcpClient._is_opencode = property(lambda self: True)
+    assert _upstream_serves_opencode() is False
+
+    sys.modules["kiro_crew.providers.acp"].AcpProvider.is_opencode_backend = property(
+        lambda self: True
+    )
+    assert _upstream_serves_opencode() is True
+
+
+def test_upstream_serves_opencode_falls_back_to_patching(mock_kiro_crew, monkeypatch):
+    """An unreadable probe must degrade to the old behaviour, not raise.
+
+    install() runs before `from kiro_crew.cli import main`, so an exception here
+    takes the gateway down with no fallback to kiro-cli.
+    """
+    from opencode_provider.install import _upstream_serves_opencode
+
+    monkeypatch.delitem(sys.modules, "kiro_crew.providers.acp")
+
+    assert _upstream_serves_opencode() is False
+
+
+def test_install_applies_client_patches_on_a_non_native_build(mock_kiro_crew, monkeypatch):
+    monkeypatch.setenv("KIROCREW_ACP_BACKEND", "opencode")
+    client = sys.modules["kiro_crew.acp.client"].AcpClient
+    before = client.__dict__["_spawn"]
+
+    install()
+
+    assert client.__dict__["_spawn"] is not before
+
+
+def test_install_retires_clobbering_patches_on_native_build(mock_kiro_crew, monkeypatch):
+    """On a kirocrew that serves opencode itself, ours must not overwrite it.
+
+    The failure this prevents is silent: our replacements are the older
+    protocol, every name they touch still exists, so nothing raises and the
+    suites stay green while sessions run the wrong implementation.
+    """
+    monkeypatch.setenv("KIROCREW_ACP_BACKEND", "opencode")
+    client = sys.modules["kiro_crew.acp.client"].AcpClient
+    provider = sys.modules["kiro_crew.providers.acp"].AcpProvider
+    loader_mod = sys.modules["kiro_crew.config.loader"]
+
+    # Pose as a native build: id registered, and both classes own their support.
+    sys.modules["kiro_crew.acp_backends"].ACP_BACKENDS_KNOWN = frozenset({"", "opencode"})
+    client._is_opencode = property(lambda self: True)
+    provider.is_opencode_backend = property(lambda self: True)
+
+    spawn_before = client.__dict__["_spawn"]
+    factory_before = loader_mod.KiroCrewConfig.create_provider_factory
+
+    install()
+
+    assert is_installed() is True
+    # Ours stayed out of the way...
+    assert client.__dict__["_spawn"] is spawn_before
+    assert loader_mod.KiroCrewConfig.create_provider_factory is factory_before
+    # ...while the patches that are still ours applied anyway.
+    assert loader_mod.KiroCrewConfig.load().agent.acp_backend == "opencode"

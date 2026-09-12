@@ -5,6 +5,9 @@ constant to acp.types, patches the provider factory to inject the opencode
 backend, and delegates the ACP provider/client patches to
 ``provider.py``.
 
+Those three patches retire themselves on a kirocrew that drives opencode
+natively — see ``_upstream_serves_opencode``.
+
 Call ``install()`` BEFORE ``kirocrew gateway`` initialises its provider factory.
 """
 
@@ -23,6 +26,46 @@ def is_installed() -> bool:
     return _installed
 
 
+def _upstream_serves_opencode() -> bool:
+    """Does the installed kirocrew already drive opencode without our patches?
+
+    Probed rather than version-checked, so the patches retire themselves the
+    moment upstream ships the backend — no version table to keep current.
+
+    Three facts together, because any one alone can hold on a build that still
+    cannot run an opencode session: the id is a real member of the registry
+    (not merely a module attribute), and both classes carry their own opencode
+    support. Read BEFORE any patching — ``patch_client``/``patch_provider``
+    install exactly those two attributes, so a later probe would only ever
+    confirm our own work.
+
+    ``kiro_crew.acp.client`` is imported before ``kiro_crew.providers.acp`` on
+    purpose: reaching the provider module through ``config.loader`` alone trips
+    the acp -> client -> session -> config.loader cycle, and importing the
+    client first breaks it.
+    """
+    try:
+        from kiro_crew import acp_backends
+        from kiro_crew.acp.client import AcpClient
+        from kiro_crew.providers.acp import AcpProvider
+    except ImportError:
+        # Unreadable means unproven: apply the patches, which is the behaviour
+        # every version before the probe existed had.
+        logger.warning(
+            "opencode_provider: could not probe for native opencode support — "
+            "assuming absent and applying every patch",
+            exc_info=True,
+        )
+        return False
+
+    known = getattr(acp_backends, "ACP_BACKENDS_KNOWN", frozenset())
+    return (
+        ACP_BACKEND_OPENCODE in known
+        and hasattr(AcpClient, "_is_opencode")
+        and hasattr(AcpProvider, "is_opencode_backend")
+    )
+
+
 def install() -> None:
     """Apply all monkey-patches. Safe to call multiple times (idempotent)."""
     global _installed
@@ -32,15 +75,32 @@ def install() -> None:
         logger.info("opencode_provider: KIROCREW_ACP_BACKEND != 'opencode' — skipping install")
         return
 
+    # Read before patching anything: the client/provider patches create the
+    # attributes this looks for.
+    native = _upstream_serves_opencode()
+
     _patch_types()
-    _patch_factory()
     _patch_bg_backend()
     _patch_prerequisite()
 
-    from opencode_provider.provider import patch_client, patch_provider
+    if native:
+        # Upstream owns the spawn and handshake path now, and its version is the
+        # richer one — per-session backend resolution, verified routing config,
+        # resume `_meta`. Re-applying ours would overwrite it SILENTLY: every
+        # name still exists, so nothing raises, `install()` still logs success
+        # and both suites stay green while sessions run the older protocol.
+        logger.info(
+            "opencode_provider: kirocrew drives opencode natively — skipping the "
+            "client, provider and factory patches; the backend registration, "
+            "_bg routing and readiness patches still apply"
+        )
+    else:
+        _patch_factory()
 
-    patch_client()
-    patch_provider()
+        from opencode_provider.provider import patch_client, patch_provider
+
+        patch_client()
+        patch_provider()
 
     _installed = True
     logger.info("opencode_provider installed — OpenCode ACP backend active")

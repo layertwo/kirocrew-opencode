@@ -65,16 +65,24 @@ kirocrew-opencode/
 | 5 | `acp_backends` + `config.loader.KiroCrewConfig` | Register `opencode` as selectable, and name it in `agent.acp_backend` on every config load — bg sessions read the *config*, not the provider, and `''` means kiro-cli |
 | 6 | `kiro_prerequisite.KiroPrerequisiteService` | Force `assume_ready=True` at construction — the kiro-cli readiness gate has nothing to probe here |
 
+Patches 2-4 **retire themselves** on a kirocrew that drives opencode natively:
+`_upstream_serves_opencode()` probes for the backend id in the registry plus
+upstream's own `AcpClient._is_opencode` and `AcpProvider.is_opencode_backend`,
+and skips them when all three are present. Patch 1 is already a no-op on such a
+build, and patches 5 and 6 are still ours — see
+[Upgrading KiroCrew](#upgrading-kirocrew).
+
 `install()` logs which patches applied:
 
 ```
 opencode_provider: added ACP_BACKEND_OPENCODE to acp.types
 opencode_provider: added opencode to ACP_BACKENDS_KNOWN
-opencode_provider: provider factory patched ✅
 opencode_provider: bg session routing patched ✅
 opencode_provider: kiro-cli readiness gate bypassed ✅
+opencode_provider: provider factory patched ✅
 opencode_provider: AcpClient patched ✅
 opencode_provider: AcpProvider patched ✅
+opencode_provider installed — OpenCode ACP backend active
 ```
 
 ## Background sessions (patch 5)
@@ -213,6 +221,29 @@ Real breakages have already happened:
   with `kiro-cli not found` — see [patch 5](#background-sessions-patch-5). They
   read `agent.acp_backend` from the config, and upstream never reads
   `KIROCREW_ACP_BACKEND`, so our provider patch was never in that decision.
+
+**When upstream ships opencode itself, patches 2-4 stop applying.** KiroCrew
+`main` already carries a native opencode backend — `ACP_BACKEND_OPENCODE` in
+`BASELINE_SELECTABLE_BACKENDS`, its own `AcpClient._is_opencode`, its own
+`AcpProvider.is_opencode_backend` — though no release tag contains it yet.
+`_upstream_serves_opencode()` probes for exactly those three facts and skips
+patches 2-4 when it finds them. Without that guard the bump would be **silent
+rather than loud**: every name our patches touch still exists upstream, so
+nothing raises and `install()` logs success while our older implementation
+overwrites upstream's newer one (per-session backend resolution, verified
+routing config, resume `_meta`).
+
+Two consequences for that bump:
+
+- the CI smoke test asserts `AcpClient._start_process` and friends exist, which
+  holds only while *our* patches applied — it fails loudly there. That is the
+  intended signal, not a regression: update the smoke test to assert upstream's
+  own names in the same commit.
+- patches 5 and 6 are still required even then. No release reads
+  `KIROCREW_ACP_BACKEND`, `agent.acp_backend` still defaults to `''` (which is a
+  member of `ACP_BACKENDS_ACP_RUNTIME`), so `_bg` sessions still reach for a
+  kiro-cli this image does not have; and the readiness gate is still
+  kiro-cli-binary driven and backend-blind.
 
 `tests/test_kirocrew_contract.py` exists to catch exactly this. Unlike the
 other test modules — which fabricate `kiro_crew` via `sys.modules` and
