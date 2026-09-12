@@ -659,8 +659,8 @@ wheels = [
 
 [[package]]
 name = "kirocrew"
-version = "0.5.0"
-source = { git = "https://github.com/kirodotdev/KiroCrew.git?tag=v0.5.0#e683282def3c25239373b0a2899679e3b031d9f3" }
+version = "0.6.0"
+source = { git = "https://github.com/kirodotdev/KiroCrew.git?tag=v0.6.0#85752095f1649215fadd4f9b7ca3a208f9ae4aca" }
 dependencies = [
     { name = "aiohttp" },
     { name = "cron-descriptor" },
@@ -672,6 +672,7 @@ dependencies = [
     { name = "openpyxl" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-sdk" },
+    { name = "pathspec" },
     { name = "pdfplumber" },
     { name = "pysqlite3-binary", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "python-docx" },
@@ -1047,7 +1048,7 @@ requires-dist = [
     { name = "flake8", marker = "extra == 'dev'", specifier = "==7.3.0" },
     { name = "flake8-pyproject", marker = "extra == 'dev'", specifier = "==1.2.4" },
     { name = "isort", marker = "extra == 'dev'", specifier = "==9.0.1" },
-    { name = "kirocrew", git = "https://github.com/kirodotdev/KiroCrew.git?tag=v0.5.0" },
+    { name = "kirocrew", git = "https://github.com/kirodotdev/KiroCrew.git?tag=v0.6.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==2.3.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
