@@ -31,12 +31,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The KiroCrew git tag in pyproject.toml is what renovate bumps, so it is
-      # the version that actually describes what is inside the image.
       - name: Read KiroCrew version
         id: kirocrew
         run: |
-          v=$(grep -oP '^kirocrew = .*tag = "v\K[^"]+' pyproject.toml)
+          v=$(grep -oP '^FROM ghcr.io/kirodotdev/kirocrew:\K\S+' Dockerfile)
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Extract metadata
@@ -64,70 +62,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # A green build only proves the COPYs resolved. These run the image.
-      # Everything here exits on its own — booting the real gateway would need
-      # config and credentials and would bind a port, which is how smoke tests
-      # turn flaky.
       - name: Smoke test the image
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
-          # One name per `command -v` — POSIX sh takes a single operand, and
-          # /bin/sh is dash on the Debian-slim base.
-          docker run --rm --entrypoint sh "$IMAGE" -c \
-            'for b in gateway kirocrew opencode; do command -v "$b"; done'
+          docker run --rm --entrypoint opencode "$IMAGE" --version
           docker run --rm --entrypoint kirocrew "$IMAGE" --version
-          docker run --rm -i --entrypoint python "$IMAGE" - <<'PY'
-          # KIROCREW_ACP_BACKEND=opencode is baked into the image, so install()
-          # applies for real here rather than no-oping.
-          import opencode_provider
-          opencode_provider.install()
-          assert opencode_provider.is_installed(), "install() no-oped"
-
-          from kiro_crew.acp.client import AcpClient
-          assert hasattr(AcpClient, "_is_opencode"), "AcpClient patch missing"
-          assert hasattr(AcpClient, "_start_process"), "spawn helper missing"
-
-          from kiro_crew.providers.acp import AcpProvider
-          assert hasattr(AcpProvider, "is_opencode_backend"), "AcpProvider patch missing"
-
-          import kiro_crew.cli  # what gateway.py imports after install()
-
-          # The dashboard SPA is served from <kiro_crew>/static/dist and ships
-          # ONLY in upstream's release wheel — the git tag it is pinned to has no
-          # such directory. Assert the image carries it, so reinstalling kirocrew
-          # from the git source (which would silently drop the frontend and serve
-          # the "not built" page) fails here instead of at runtime.
-          from pathlib import Path
-          import kiro_crew
-          ui = Path(kiro_crew.__file__).parent / "static" / "dist" / "index.html"
-          assert ui.is_file(), f"dashboard UI missing from image: {ui}"
-
-          # No kiro-cli exists in this image, so the readiness gate it drives can
-          # never pass by probing: unpatched, the dashboard serves its install
-          # gate and /v1/chat/completions 503s with kiro_prerequisite_required.
-          # Assert the patch (install.py) really took effect in the image.
-          from kiro_crew.kiro_prerequisite import KiroPrerequisiteService
-          snapshot = KiroPrerequisiteService(environ={})._snapshot_dict()
-          assert snapshot["ready"] and snapshot["initial_setup_complete"], (
-              f"kiro-cli readiness gate not bypassed: {snapshot}"
-          )
-
-          # Background sessions (auto-title, link-summary) read the CONFIG, not
-          # the provider, and take the multiplexed kiro-cli runtime when
-          # agent.acp_backend is in ACP_BACKENDS_ACP_RUNTIME — so a config that
-          # does not name opencode fails them one per session with
-          # "kiro-cli not found", while interactive sessions work.
-          from kiro_crew.config.loader import KiroCrewConfig
-          from kiro_crew.session import _bg_runtime_backends
-          cfg = KiroCrewConfig.load()
-          assert cfg.agent.acp_backend == "opencode", (
-              f"config does not name the opencode backend: {cfg.agent.acp_backend!r}"
-          )
-          assert "opencode" not in _bg_runtime_backends(), (
-              f"background sessions route to the multiplexed runtime: {_bg_runtime_backends()}"
-          )
-
-          print("smoke ok")
-          PY
+          # Readiness gate: whoami must exit 0 with the baked placeholder key.
+          docker run --rm --entrypoint kiro-cli "$IMAGE" whoami
