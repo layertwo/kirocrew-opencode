@@ -10,7 +10,7 @@ RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v${OPENC
 
 RUN apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg gh git nodejs npm \
+    && apt-get install -y --no-install-recommends awscli ca-certificates curl ffmpeg gh git nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
 USER kirocrew
