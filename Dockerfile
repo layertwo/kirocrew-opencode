@@ -1,4 +1,4 @@
-FROM ghcr.io/kirodotdev/kirocrew:0.7.2
+FROM ghcr.io/kirodotdev/kirocrew:0.8.0
 
 # renovate: datasource=github-releases depName=anomalyco/opencode
 ARG OPENCODE_VERSION=1.18.34
