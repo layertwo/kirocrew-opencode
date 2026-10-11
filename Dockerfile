@@ -1,7 +1,7 @@
 FROM ghcr.io/kirodotdev/kirocrew:0.8.0
 
 # renovate: datasource=github-releases depName=anomalyco/opencode
-ARG OPENCODE_VERSION=1.18.35
+ARG OPENCODE_VERSION=1.19.0
 
 USER root
 RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz" \
