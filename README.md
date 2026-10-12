@@ -9,7 +9,7 @@ The official [KiroCrew](https://github.com/kirodotdev/KiroCrew) image with the
 | Layer | Source |
 |---|---|
 | KiroCrew gateway, entrypoint, kiro-cli | `ghcr.io/kirodotdev/kirocrew` (unchanged) |
-| `opencode` binary | `/usr/local/bin/opencode`, from the OpenCode GitHub release |
+| `opencode` binary | `/usr/local/bin/opencode`, from the `@opencode/cli` npm package |
 | `KIRO_API_KEY` | A placeholder value (see below) |
 
 Entrypoint, user (`kirocrew`, uid 1000), port (`5476`) and data home

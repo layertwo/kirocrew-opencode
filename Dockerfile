@@ -1,17 +1,16 @@
 FROM ghcr.io/kirodotdev/kirocrew:0.8.0
 
-# renovate: datasource=github-releases depName=anomalyco/opencode
-ARG OPENCODE_VERSION=1.18.35
+# renovate: datasource=npm depName=@opencode/cli
+ARG OPENCODE_VERSION=2.0.26
 
 USER root
-RUN curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz" \
-    | tar -xz -C /usr/local/bin opencode \
-    && opencode --version
-
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends awscli ca-certificates curl ffmpeg gh git nodejs npm \
     && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g "@opencode/cli@${OPENCODE_VERSION}" \
+    && opencode --version
 
 USER kirocrew
 
