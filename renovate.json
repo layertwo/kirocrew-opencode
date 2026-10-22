@@ -3,5 +3,11 @@
   "extends": [
     "local>layertwo/renovate-config",
     "customManagers:dockerfileVersions"
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["@opencode/cli"],
+      "schedule": ["before 6am on monday"]
+    }
   ]
 }
