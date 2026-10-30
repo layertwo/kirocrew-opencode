@@ -1,4 +1,4 @@
-FROM ghcr.io/kirodotdev/kirocrew:0.10.0
+FROM ghcr.io/kirodotdev/kirocrew:0.11.0
 
 # renovate: datasource=npm depName=@opencode/cli
 ARG OPENCODE_VERSION=2.1.4
