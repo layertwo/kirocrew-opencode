@@ -1,7 +1,7 @@
 FROM ghcr.io/kirodotdev/kirocrew:0.12.0
 
 # renovate: datasource=npm depName=@opencode/cli
-ARG OPENCODE_VERSION=2.2.5
+ARG OPENCODE_VERSION=2.2.6
 
 USER root
 RUN apt-get update \
