@@ -10,7 +10,13 @@ The official [KiroCrew](https://github.com/kirodotdev/KiroCrew) image with the
 |---|---|
 | KiroCrew gateway, entrypoint, kiro-cli | `ghcr.io/kirodotdev/kirocrew` (unchanged) |
 | `opencode` binary | `/usr/local/bin/opencode`, from the `@opencode/cli` npm package |
+| `sshd` | `/usr/sbin/sshd`, from Debian's `openssh-server`; not started by the entrypoint |
+| `tunnel` binary | `/usr/local/bin/tunnel`, the [layertwo/tunnels](https://github.com/layertwo/tunnels) CLI, checked against the release's `checksums.txt` |
 | `KIRO_API_KEY` | A placeholder value (see below) |
+
+`sshd` and `tunnel` are for running sidecars from this same image: `sshd` on
+the pod's loopback plus `tunnel up <port> --ssh` lets Remote Crew reach the
+gateway over SSH without exposing a port.
 
 Entrypoint, user (`kirocrew`, uid 1000), port (`5476`) and data home
 (`/home/kirocrew`) are inherited from the upstream image.
@@ -58,6 +64,7 @@ approval gate; per-tool rules in `opencode.json` are kept.
 |---|---|---|
 | KiroCrew | `FROM` in `Dockerfile` | Renovate (docker) |
 | OpenCode | `OPENCODE_VERSION` in `Dockerfile` | Renovate (`customManagers:dockerfileVersions`) |
+| tunnel | `TUNNEL_VERSION` in `Dockerfile` | Renovate (`customManagers:dockerfileVersions`) |
 
 Images are published to `ghcr.io/layertwo/kirocrew-opencode` as `latest` and
 `<kirocrew version>` on every push to `main`. Builds are `linux/amd64` only.
