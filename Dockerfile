@@ -1,7 +1,7 @@
 FROM ghcr.io/kirodotdev/kirocrew:0.12.2
 
 # renovate: datasource=npm depName=@opencode/cli
-ARG OPENCODE_VERSION=2.2.6
+ARG OPENCODE_VERSION=2.3.2
 
 # renovate: datasource=github-releases depName=layertwo/tunnels
 ARG TUNNEL_VERSION=v0.4.0
